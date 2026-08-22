@@ -884,6 +884,16 @@ export default function Field3D() {
       uTime: { value: number };
       uMotion: { value: number };
     };
+    // Reflector normally re-renders the scene from inside the composer's
+    // render pass (onBeforeRender) — a documented source of flicker and
+    // redundant nested renders. Render the reflection exactly once per frame,
+    // BEFORE the composer runs, and make the in-pass hook a no-op.
+    const updateReflection = water.onBeforeRender.bind(water) as (
+      renderer: THREE.WebGLRenderer,
+      scene: THREE.Scene,
+      camera: THREE.Camera
+    ) => void;
+    water.onBeforeRender = () => {};
 
     // ---- soft-dot texture for stars/motes ----
     const spriteCanvas = document.createElement("canvas");
@@ -1663,6 +1673,8 @@ export default function Field3D() {
       const moving =
         cam.tween > 0 || cam.vel.lengthSq() > 0.0009 || keys.size > 0;
       if (motion || moving || needsRedraw) {
+        camera.updateMatrixWorld();
+        updateReflection(renderer, scene, camera);
         composer.render();
         needsRedraw = false;
       }
