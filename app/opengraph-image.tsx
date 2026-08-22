@@ -73,7 +73,10 @@ export default async function Image() {
         <div
           style={{
             position: "absolute",
-            inset: 0,
+            top: 0,
+            left: 0,
+            width: 1200,
+            height: 630,
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
