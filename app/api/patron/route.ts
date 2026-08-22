@@ -6,12 +6,9 @@ import { moderate } from "@/lib/moderation";
 
 export const runtime = "nodejs";
 
-function requestOrigin(req: Request): string {
-  const host =
-    req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "waystation.world";
-  const proto = req.headers.get("x-forwarded-proto") ?? "https";
-  return `${proto}://${host}`;
-}
+// Own the redirect target — never derive it from client-controllable headers
+// (an attacker could point post-payment redirects at their own domain).
+const ORIGIN = process.env.SITE_URL ?? "https://waystation.world";
 
 // POST /api/patron  { lantern_id, amount_cents, patron_name? }
 export async function POST(req: Request) {
@@ -78,7 +75,7 @@ export async function POST(req: Request) {
     amountCents: amount,
     lanternId,
     patronName,
-    origin: requestOrigin(req),
+    origin: ORIGIN,
   });
   if (!session.ok) {
     return NextResponse.json({ ok: false, error: session.error }, { status: 502 });

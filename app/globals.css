@@ -330,6 +330,7 @@ code.inline {
   opacity: 0.9;
   pointer-events: auto;
   white-space: nowrap;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.95);
 }
 
 .field-hud nav {
@@ -346,7 +347,9 @@ code.inline {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink);
-  opacity: 0.82;
+  opacity: 0.9;
+  padding: 0.2rem 0;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.95);
 }
 .field-hud nav a:hover {
   color: var(--amber);
@@ -840,23 +843,38 @@ code.inline {
     justify-content: flex-start;
     gap: var(--s3);
   }
+  /* single non-wrapping control row pinned to the bottom, with its own scrim */
   .field-controls {
     top: auto;
-    bottom: 4.4rem;
-    right: var(--s3);
+    bottom: var(--s2);
+    left: var(--s2);
+    right: var(--s2);
     transform: none;
     flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    max-width: 60vw;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    gap: 0.4rem;
+    max-width: none;
+    background: rgba(4, 7, 15, 0.72);
+    padding: 0.4rem;
+    border-radius: 8px;
+    backdrop-filter: blur(6px);
   }
+  .field-controls button {
+    flex: 0 0 auto;
+  }
+  /* count + hint move below the stacked HUD, clear of the bottom controls */
   .field-count {
-    bottom: var(--s2);
+    top: 5.4rem;
+    bottom: auto;
+    left: var(--s4);
     max-width: 90vw;
   }
   .field-hint {
     position: absolute;
-    bottom: 2.1rem;
+    top: 7rem;
+    bottom: auto;
     left: var(--s4);
     right: var(--s4);
     max-width: none;

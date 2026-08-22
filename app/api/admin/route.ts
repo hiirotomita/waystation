@@ -80,7 +80,14 @@ export async function POST(req: Request) {
 
   // field-wide switches (no id)
   if (action === "close" || action === "open") {
-    await admin.from("settings").update({ value: action === "open" }).eq("key", "accepting");
+    const { error: sErr } = await admin
+      .from("settings")
+      .update({ value: action === "open" })
+      .eq("key", "accepting");
+    if (sErr) {
+      console.error("admin field toggle failed:", sErr.message);
+      return NextResponse.json({ ok: false, error: "action_failed" }, { status: 500 });
+    }
     await admin.from("moderation_log").insert({ action: `field_${action}`, note: null });
     return NextResponse.json({ ok: true });
   }
@@ -91,25 +98,30 @@ export async function POST(req: Request) {
   }
   const note = typeof body.note === "string" ? body.note.slice(0, 200) : null;
 
+  let err: { message: string } | null = null;
   if (action === "hide") {
-    await admin.from("lanterns").update({ hidden: true }).eq("id", id);
+    ({ error: err } = await admin.from("lanterns").update({ hidden: true }).eq("id", id));
   } else if (action === "unhide") {
     // clearing a lantern makes it report-immune so a brigade can't re-hide it
-    await admin.from("lanterns").update({ hidden: false, report_count: 0, report_immune: true }).eq("id", id);
+    ({ error: err } = await admin.from("lanterns").update({ hidden: false, report_count: 0, report_immune: true }).eq("id", id));
     await admin.from("reports").delete().eq("lantern_id", id);
   } else if (action === "delete") {
     // soft delete: recoverable for 30 days, then reaped
-    await admin.from("lanterns").update({ deleted_at: new Date().toISOString(), hidden: true }).eq("id", id);
+    ({ error: err } = await admin.from("lanterns").update({ deleted_at: new Date().toISOString(), hidden: true }).eq("id", id));
   } else if (action === "restore") {
-    await admin.from("lanterns").update({ deleted_at: null, hidden: false, report_count: 0, report_immune: true }).eq("id", id);
+    ({ error: err } = await admin.from("lanterns").update({ deleted_at: null, hidden: false, report_count: 0, report_immune: true }).eq("id", id));
     await admin.from("reports").delete().eq("lantern_id", id);
   } else if (action === "purge") {
-    // hard delete — for illegal content only (irreversible, gifts cascade)
-    await admin.from("lanterns").delete().eq("id", id);
+    // hard delete — for illegal content only (see RUNBOOK CSAM flow first)
+    ({ error: err } = await admin.from("lanterns").delete().eq("id", id));
   } else {
     return NextResponse.json({ ok: false, error: "unknown_action" }, { status: 400 });
   }
 
+  if (err) {
+    console.error("admin action failed:", action, err.message);
+    return NextResponse.json({ ok: false, error: "action_failed" }, { status: 500 });
+  }
   await admin.from("moderation_log").insert({ action, lantern_id: id, note });
   return NextResponse.json({ ok: true });
 }

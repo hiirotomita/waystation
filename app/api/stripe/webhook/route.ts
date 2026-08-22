@@ -61,9 +61,17 @@ export async function POST(req: Request) {
     // reflect reversals: reverse the gift by PaymentIntent and dim the lantern
     const ch = event.data?.object ?? {};
     const pi = typeof ch.payment_intent === "string" ? ch.payment_intent : null;
+    // partial refunds carry amount_refunded < amount; disputes reverse fully
+    const refundCents =
+      event.type === "charge.refunded" && typeof ch.amount_refunded === "number"
+        ? ch.amount_refunded
+        : null;
     let reversed: { ok?: boolean; lantern_id?: string } | null = null;
     if (pi) {
-      const { data } = await admin.rpc("reverse_gift_pi", { p_payment_intent: pi });
+      const { data } = await admin.rpc("reverse_gift_pi", {
+        p_payment_intent: pi,
+        p_refund_cents: refundCents,
+      });
       reversed = data as { ok?: boolean; lantern_id?: string } | null;
     }
     await alertOperator(

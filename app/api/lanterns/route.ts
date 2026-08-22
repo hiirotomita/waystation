@@ -10,6 +10,7 @@ const MAX_BODY_BYTES = 4096;
 
 // Warn the operator once per warm instance that the external classifier is off,
 // so "no key" is never a silent fail-open (local heuristics + reports remain).
+let classifierSynced = false;
 let warnedClassifierOff = false;
 function warnClassifierOff() {
   if (warnedClassifierOff) return;
@@ -80,6 +81,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 });
   }
 
+  // Throttle BEFORE the (up to 4s) external moderation call, so a flood can't
+  // hold serverless functions open. A generous 10/min lets legit retries
+  // through while cheaply rejecting abuse.
+  let key: string;
+  try {
+    key = rateKey(req);
+  } catch {
+    console.error("POST /api/lanterns: IP_SALT missing");
+    return NextResponse.json({ ok: false, error: "field_unreachable" }, { status: 503 });
+  }
+  const { data: preOk } = await admin.rpc("check_rate", {
+    p_kind: "lantern_pre",
+    p_ip_hash: key,
+    p_window_secs: 60,
+    p_limit: 10,
+  });
+  if (preOk === false) {
+    return NextResponse.json({ ok: false, error: "rate_limited_come_back_soon" }, { status: 429 });
+  }
+
   const filtered = filterMessage(body.message);
   if (!filtered.ok) {
     return NextResponse.json({ ok: false, error: filtered.reason }, { status: 400 });
@@ -97,8 +118,13 @@ export async function POST(req: Request) {
   // classifier enabled but unreachable → accept but HOLD hidden for review
   const hold = "hold" in moderation && moderation.hold === true;
 
-  // if the external classifier is OFF entirely, make it loud (once per instance)
-  if (!moderationEnabled()) warnClassifierOff();
+  // record the classifier state (shown on /admin + /api/health) once per
+  // warm instance, and alert loudly if it is off entirely
+  if (!classifierSynced) {
+    classifierSynced = true;
+    admin.rpc("set_classifier", { p_on: moderationEnabled() });
+    if (!moderationEnabled()) warnClassifierOff();
+  }
 
   const hue =
     typeof body.hue === "number" && Number.isFinite(body.hue)
@@ -108,14 +134,6 @@ export async function POST(req: Request) {
     typeof body.seed === "number" && Number.isFinite(body.seed)
       ? Math.abs(Math.round(body.seed)) % 2147483647
       : Math.floor(Math.random() * 2147483647);
-
-  let key: string;
-  try {
-    key = rateKey(req);
-  } catch {
-    console.error("POST /api/lanterns: IP_SALT missing");
-    return NextResponse.json({ ok: false, error: "field_unreachable" }, { status: 503 });
-  }
 
   const { data, error } = await admin.rpc("submit_lantern", {
     p_message: filtered.message,

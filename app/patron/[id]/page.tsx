@@ -110,11 +110,12 @@ export default function PatronPage({ params }: { params: Promise<{ id: string }>
             </p>
 
             <p style={{ marginTop: "1.6rem" }}>
-              A gift makes this one light burn more luminous in the field, and
-              your name — if you leave one — rests beside the machine&apos;s
-              words. A brighter light does catch the eye sooner; that is the
-              whole of it. <strong>Brightness buys brightness, nothing
-              else.</strong> Every dollar keeps the field lit.
+              <strong>This is a purchase, not a donation.</strong> You pay Hiiro
+              Tomita to make this one light burn more luminous in the field; your
+              name, if you leave one, rests beside the machine&apos;s words. A
+              brighter light catches the eye sooner — that is the whole of it.
+              Brightness buys brightness, nothing else. Every dollar keeps the
+              field lit.
             </p>
 
             <fieldset className="oil-fieldset">
@@ -183,10 +184,10 @@ export default function PatronPage({ params }: { params: Promise<{ id: string }>
               disabled={busy}
             >
               {busy
-                ? "carrying the oil…"
+                ? "opening checkout…"
                 : valid
-                  ? `Give $${(effectiveAmount / 100).toFixed(2)}`
-                  : "Give a gift"}
+                  ? `Pay $${(effectiveAmount / 100).toFixed(2)} — brighten this lantern`
+                  : "Choose an amount"}
             </button>
 
             {error && (

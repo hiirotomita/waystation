@@ -54,7 +54,7 @@ POST https://waystation.world/api/lanterns
   and an optional high-recall classifier (`MODERATION_API_KEY`) for the
   categories a wordlist can't cover.
 - **Privacy.** No raw IPs stored. Rate-limit hashes are salted (the salt is
-  mandatory — the app refuses to start without it) and purged after 48h by a
+  mandatory — the app refuses to start without it) and purged within about 72h by a
   daily cron. Lanterns keep no submitter identifier.
 - **Payments.** Gifts are recorded by a Stripe webhook (the authoritative
   path) and idempotently by session id, so a captured payment always

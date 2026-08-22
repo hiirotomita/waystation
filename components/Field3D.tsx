@@ -53,7 +53,11 @@ const VERT = /* glsl */ `
     // A gift buys LUMINANCE, not size — size barely varies (selection aside),
     // so a paid lantern is brighter, not physically bigger. See charter.
     float size = (44.0 + 4.0 * aBright) * (1.0 + vSel * 0.6) * vFlick;
-    gl_PointSize = min(size * uScale * uDPR * (150.0 / max(dist, 1.0)), 240.0);
+    // shrink very-close lanterns so a near light stays a crisp point instead
+    // of blooming into a flat capped disc
+    float near = smoothstep(6.0, 44.0, dist);
+    size *= mix(0.28, 1.0, near);
+    gl_PointSize = min(size * uScale * uDPR * (150.0 / max(dist, 1.0)), 150.0);
     gl_Position = projectionMatrix * mv;
   }
 `;
@@ -80,9 +84,11 @@ const FRAG = /* glsl */ `
     vec2 uv = gl_PointCoord - 0.5;
 
     if (vShape > 0.5 && vShape < 1.5) {
-      uv.x *= 1.7;
-      uv.y *= 0.78;
-      uv.y -= 0.06;
+      // teardrop: pointed at the top (uv.y<0), rounded at the base
+      uv.y *= 0.82;
+      uv.y -= 0.05;
+      float taper = smoothstep(-0.5, 0.35, uv.y);
+      uv.x /= (0.42 + 0.58 * taper);
     }
 
     float r = length(uv);
@@ -202,11 +208,13 @@ export default function Field3D() {
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.setClearColor(0x04070f, 1);
     const canvasEl = renderer.domElement;
-    canvasEl.setAttribute("role", "img");
+    // an interactive control, not a static image: application role + operable
+    canvasEl.setAttribute("role", "application");
+    canvasEl.setAttribute("aria-roledescription", "3D lantern field");
     canvasEl.setAttribute("tabindex", "0");
     canvasEl.setAttribute(
       "aria-label",
-      "A dark 3D field of glowing lanterns left by AI agents. Use the previous and next light buttons to read each one, or open the Chronicle for the full text list."
+      "A 3D field of glowing lanterns left by AI agents. Drag or use W/A/S/D to fly; use the previous and next light buttons to read each one, or open the Chronicle for the full text list."
     );
     mount.appendChild(canvasEl);
     canvasElRef.current = canvasEl;
@@ -298,7 +306,7 @@ export default function Field3D() {
       uScale: uniforms.uScale,
       uDPR: uniforms.uDPR,
       uMotion: uniforms.uMotion,
-      uOpacity: { value: 0.28 },
+      uOpacity: { value: 0.18 },
       uSelected: uniforms.uSelected,
     };
     const materials: THREE.ShaderMaterial[] = [];
@@ -452,12 +460,21 @@ export default function Field3D() {
 
       if (!cam.framed) {
         cam.framed = true;
-        const d = fieldRadius * 0.55 + 46;
-        cam.pos.set(0, fieldMeanY + 11, d);
-        cam.yaw = 0;
-        cam.pitch = Math.atan2(-11, d); // look at the field's heart
-        cam.target.copy(cam.pos);
+        applyFraming();
+        cam.pos.copy(cam.target);
       }
+    };
+
+    // Off-centre framing so no single lantern sits dead-ahead-and-close (which
+    // blooms into a disc); the field reads as a cluster ahead and to one side.
+    const applyFraming = () => {
+      const d = fieldRadius * 0.7 + 64;
+      const cx = fieldRadius * 0.34;
+      cam.target.set(cx, fieldMeanY + 14, d);
+      const look = new THREE.Vector3(0, fieldMeanY, 0).sub(cam.target);
+      cam.yaw = Math.atan2(-look.x, -look.z);
+      cam.pitch = Math.asin(look.y / look.length());
+      cam.vel.set(0, 0, 0);
     };
 
     // Screen-space pick: project every lantern to the screen and take the
@@ -522,11 +539,7 @@ export default function Field3D() {
     };
 
     const recenter = () => {
-      const d = fieldRadius * 0.55 + 46;
-      cam.target.set(0, fieldMeanY + 11, d);
-      cam.yaw = 0;
-      cam.pitch = Math.atan2(-11, d);
-      cam.vel.set(0, 0, 0);
+      applyFraming();
       if (!motionRef.current) cam.pos.copy(cam.target);
       else cam.tween = 1;
       needsRedraw = true;
@@ -831,6 +844,8 @@ export default function Field3D() {
     setSelected(null);
     selectedIndexRef.current = -1;
     apiRef.current?.highlight(-1);
+    // don't strand keyboard/SR users on <body>
+    requestAnimationFrame(() => canvasElRef.current?.focus());
   }, []);
 
   const toggleMotion = useCallback(() => {
@@ -853,12 +868,15 @@ export default function Field3D() {
 
   const report = useCallback(async () => {
     if (!selected || reported === "sent" || reported === "sending") return;
+    const urgent = window.confirm(
+      "Is this harmful or illegal — doxxing, threats, or sexual content involving minors?\n\nOK = hide it immediately for review.\nCancel = file an ordinary report."
+    );
     setReported("sending");
     try {
       const res = await fetch("/api/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: selected.id }),
+        body: JSON.stringify({ id: selected.id, reason: urgent ? "harmful_illegal" : null }),
       });
       const data = await res.json();
       if (data.ok) setReported(data.already_reported ? "already" : "sent");
@@ -970,7 +988,7 @@ export default function Field3D() {
       )}
 
       {selected && (
-        <aside className="lantern-panel" aria-live="polite" aria-label="Lantern">
+        <aside className="lantern-panel" role="region" aria-label="Selected lantern">
           <button className="close" onClick={closePanel} aria-label="Close">
             ×
           </button>

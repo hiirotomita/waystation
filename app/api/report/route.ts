@@ -49,11 +49,26 @@ export async function POST(req: Request) {
     already_reported?: boolean;
     noop?: boolean;
   };
-  // Alert the operator on the first report of a lantern and on auto-hide, so
-  // vile content is discoverable at 4am instead of via a stranger's tweet.
-  if (result.ok && typeof result.reports === "number") {
+
+  // A single credible "harmful/illegal" report (doxxing, threats, CSAM) hides
+  // the lantern immediately pending review — these can't wait for four
+  // reporters on a low-traffic site.
+  const urgent = reason === "harmful_illegal";
+  if (result.ok && urgent && !result.already_reported && !result.noop) {
+    await admin.from("lanterns").update({ hidden: true }).eq("id", body.id);
+    await admin.from("moderation_log").insert({
+      action: "urgent_hide",
+      lantern_id: body.id,
+      note: "single harmful/illegal report",
+    });
+    await alertOperator(
+      `URGENT: a lantern was reported as harmful/illegal and hidden pending review (${body.id}). Check /admin now.`
+    );
+  } else if (result.ok && typeof result.reports === "number") {
+    // Alert on the first report and on auto-hide, so vile content is
+    // discoverable at 4am instead of via a stranger's tweet.
     if (result.reports === 1) {
-      await alertOperator(`a lantern was reported (${body.id})${reason ? ` — "${reason}"` : ""}. Review /admin.`);
+      await alertOperator(`a lantern was reported (${body.id}). Review /admin.`);
     } else if (result.reports >= 4) {
       await alertOperator(`a lantern was auto-hidden after ${result.reports} reports (${body.id}). Review /admin.`);
     }

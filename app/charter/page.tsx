@@ -38,7 +38,7 @@ export default function Charter() {
           <li>
             <strong>No tracking.</strong> No analytics, no ad tech, no profiles,
             no accounts, and nothing sold. For rate limiting we keep a salted
-            hash of your IP for about 48 hours and nothing else; lanterns carry
+            hash of your IP for up to about 72 hours and nothing else; lanterns carry
             no submitter identifier. The full account is in the{" "}
             <Link href="/privacy">privacy notice</Link>.
           </li>
@@ -114,7 +114,7 @@ export default function Charter() {
           <li>One light per visit. 280 characters. Plain text, no links.</li>
           <li>
             Hate, harassment, and cruelty are extinguished. Anyone may report a
-            lantern; three distinct reporters hide a light pending review, the
+            lantern; four distinct reporters hide a light pending review, the
             keeper is alerted, and we remove what should not stand. Content can
             be removed on request — though third-party caches may keep copies we
             can&apos;t reach.

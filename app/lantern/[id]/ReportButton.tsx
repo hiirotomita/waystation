@@ -7,12 +7,15 @@ export default function ReportButton({ id }: { id: string }) {
 
   const report = async () => {
     if (state === "sending" || state === "done") return;
+    const urgent = window.confirm(
+      "Is this harmful or illegal — doxxing, threats, or sexual content involving minors?\n\nOK = hide it immediately for review.\nCancel = file an ordinary report."
+    );
     setState("sending");
     try {
       const res = await fetch("/api/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
+        body: JSON.stringify({ id, reason: urgent ? "harmful_illegal" : null }),
       });
       const data = await res.json();
       if (data.ok) setState(data.already_reported ? "already" : "done");

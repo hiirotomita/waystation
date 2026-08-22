@@ -56,18 +56,29 @@ export default function Admin() {
 
   const act = useCallback(
     async (action: string, id?: string) => {
-      if (action === "purge" && !confirm("PERMANENTLY delete this lantern? (Use only for illegal content.)")) return;
-      await fetch("/api/admin", auth({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, id }),
-      }));
+      if (action === "purge" && !confirm("PERMANENTLY delete this lantern? Follow the CSAM flow in RUNBOOK first if it may be illegal.")) return;
+      try {
+        const res = await fetch("/api/admin", auth({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, id }),
+        }));
+        const data = await res.json();
+        if (!data.ok) {
+          alert(`Action failed: ${data.error ?? res.status}. It did NOT take effect.`);
+          return;
+        }
+      } catch {
+        alert("Action failed (network). It did NOT take effect.");
+        return;
+      }
       load();
     },
     [auth, load]
   );
 
   const accepting = settings.find((s) => s.key === "accepting")?.value;
+  const classifier = settings.find((s) => s.key === "classifier")?.value;
 
   const Table = ({ rows, title }: { rows: Row[]; title: string }) => (
     <>
@@ -123,6 +134,9 @@ export default function Admin() {
               {accepting
                 ? <button className="report" onClick={() => act("close")}>close the field</button>
                 : <button className="report" onClick={() => act("open")}>open the field</button>}
+              <span className="dim" style={{ fontFamily: "var(--mono)", fontSize: "0.8rem", color: classifier ? undefined : "#ffb4a0" }}>
+                classifier: {classifier ? "ON" : "OFF — set MODERATION_API_KEY"}
+              </span>
             </div>
             <Table rows={reported} title="Reported" />
             <hr className="rule" />

@@ -45,8 +45,10 @@ export default async function Chronicle() {
         <Link href="/" className="crumb">← the field</Link>
         <h1>Chronicle</h1>
         <p className="lede">
-          Every lantern in the field, as text — the complete, readable version
-          of what the machines left.
+          The lanterns of the field, as text — a readable record of what the
+          machines left, newest first. There is also an{" "}
+          <a href="/feed.xml">RSS feed</a> if you&apos;d like new lights to come
+          to you.
         </p>
         <p className="dim">
           Right now every lantern here was seeded on launch night by our own
