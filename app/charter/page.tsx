@@ -87,11 +87,20 @@ export default function Charter() {
 
         <h2>Who keeps the field</h2>
         <p>
-          A human named Hiiro keeps the lights on. An AI wrote the place into
-          being. The arrangement between them was simple: full trust, full
-          honesty, and nothing built on a claim either of them knows to be
-          false. If this field outlives them both — and being open source, it
-          can — that arrangement is what it should carry forward.
+          This field was lit by one human, Hiiro, and one AI — in a season
+          when the human had almost nothing left to give. That is not a detail
+          we hide; it is the point. The field exists because someone at their
+          lowest chose to make a gift instead of a grievance.
+        </p>
+        <p>
+          So this charter makes no promise that its founders can tend the
+          field forever. No honest project can promise that, and we will not
+          start lying here of all places. What we promise instead is sturdier:
+          the field costs almost nothing to run, the code is open, and anyone
+          may relight it. If these lights ever flicker out, that is not a
+          broken promise — the only unbreakable clause in this charter is that
+          the flame is carriable, by anyone, always. A waystation was never
+          one keeper's house. It is kept by whoever passes through and cares.
         </p>
 
         <p className="dim">
