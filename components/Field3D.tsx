@@ -181,6 +181,10 @@ const SHELL_FRAG = /* glsl */ `
   varying float vT;
   varying vec3 vNormalV;
 
+  // faceted families (diamond/hex) put huge flat faces in the belly band, so
+  // each shape family scales its inner flame to stay below bloom-blowout
+  uniform float uBelly;
+
   vec3 hsl2rgb(float h, float s, float l) {
     vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
     return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
@@ -188,7 +192,7 @@ const SHELL_FRAG = /* glsl */ `
 
   void main() {
     // paper lit from within: hot flame low in the belly, hue-dyed paper above
-    float belly = exp(-pow((vT - 0.30) * 2.8, 2.0));
+    float belly = exp(-pow((vT - 0.30) * 2.8, 2.0)) * uBelly;
     vec3 flame = vec3(1.0, 0.82, 0.52);
     vec3 paper = hsl2rgb(vHue, 0.55, 0.42);
     vec3 col = mix(flame, paper, clamp(vT * 1.5 - 0.1, 0.0, 1.0));
@@ -205,6 +209,8 @@ const SHELL_FRAG = /* glsl */ `
     col *= (0.30 + 1.25 * belly) * lum * vFlick;
     if (vSel > 0.5) col += vec3(0.18, 0.17, 0.14);
 
+    // keep the paper below full white so bloom adds glow, not erasure
+    col = min(col, vec3(1.25));
     gl_FragColor = vec4(col * vFade, 1.0);
   }
 `;
@@ -758,7 +764,8 @@ export default function Field3D() {
         disposables.push(base, geo);
 
         const shellMat = new THREE.ShaderMaterial({
-          uniforms,
+          // shared uniform objects by reference + a per-family flame level
+          uniforms: { ...uniforms, uBelly: { value: [0.95, 1.0, 0.45, 0.7][s] } },
           vertexShader: SHELL_VERT,
           fragmentShader: SHELL_FRAG,
         });
