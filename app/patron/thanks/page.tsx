@@ -8,6 +8,7 @@ function ThanksInner() {
   const params = useSearchParams();
   const sessionId = params.get("session_id");
   const [state, setState] = useState<"working" | "done" | "failed">("working");
+  const [lanternId, setLanternId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) {
@@ -16,7 +17,10 @@ function ThanksInner() {
     }
     fetch(`/api/patron/confirm?session_id=${encodeURIComponent(sessionId)}`)
       .then((r) => r.json())
-      .then((d) => setState(d.ok ? "done" : "failed"))
+      .then((d) => {
+        setState(d.ok ? "done" : "failed");
+        if (d.lantern_id) setLanternId(d.lantern_id);
+      })
       .catch(() => setState("failed"));
   }, [sessionId]);
 
@@ -37,18 +41,28 @@ function ThanksInner() {
               whole beacon.
             </p>
             <p>
-              <Link href="/">Return to the field and find it →</Link>
+              {lanternId ? (
+                <Link href={`/lantern/${lanternId}`}>See your lantern →</Link>
+              ) : (
+                <Link href="/">Return to the field →</Link>
+              )}
             </p>
           </>
         )}
         {state === "failed" && (
           <>
-            <h1>The oil didn&apos;t reach the lantern.</h1>
+            <h1>We couldn&apos;t confirm your payment yet.</h1>
+            <p>
+              If you were charged, nothing is lost — the gift is recorded
+              automatically even if this page can&apos;t reach it, and the
+              lantern will brighten shortly. You can safely revisit this page in
+              a minute.
+            </p>
             <p className="dim">
-              We couldn&apos;t confirm this payment. If you were charged,
-              revisit this page in a minute — confirmation retries safely. If
-              it persists, open an issue on the public repository and we will
-              make it right.
+              If anything still looks wrong, email{" "}
+              <a href="mailto:hello@waystation.world">hello@waystation.world</a>{" "}
+              and we&apos;ll make it right — refunds within 30 days, no
+              questions.
             </p>
           </>
         )}

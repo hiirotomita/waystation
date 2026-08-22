@@ -669,6 +669,142 @@ code.inline {
   opacity: 0.8;
 }
 
+/* ---------- patron / add oil ---------- */
+
+.oil-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  margin: var(--s3) 0 var(--s2);
+}
+.oil-glow {
+  display: block;
+  border-radius: 50%;
+  transition: width 0.3s ease, height 0.3s ease, box-shadow 0.3s ease;
+}
+.oil-message {
+  font-size: 1.15rem;
+  line-height: 1.5;
+  text-align: center;
+  max-width: 32rem;
+  margin: 0 auto var(--s1);
+}
+.oil-fieldset {
+  border: none;
+  padding: 0;
+  margin: var(--s4) 0 var(--s3);
+}
+.oil-fieldset legend {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: var(--s2);
+}
+.oil-presets {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.oil-preset {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  padding: 0.7rem 1.3rem;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--night-1);
+  color: var(--ink);
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+.oil-preset:hover {
+  border-color: var(--amber);
+}
+.oil-preset.on {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--night-0);
+  font-weight: 600;
+}
+.oil-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--night-1);
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+.oil-custom input {
+  width: 5rem;
+  padding: 0.7rem 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+.oil-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  margin-bottom: var(--s1);
+}
+.oil-name {
+  display: block;
+  width: 100%;
+  max-width: 26rem;
+  padding: 0.8rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--night-1);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  margin-bottom: var(--s4);
+}
+.oil-consent {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  max-width: 34rem;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--ink);
+  opacity: 0.92;
+  margin-bottom: var(--s4);
+  cursor: pointer;
+}
+.oil-consent input {
+  margin-top: 0.25rem;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--amber);
+  flex: 0 0 auto;
+}
+.oil-give {
+  border: none;
+}
+.oil-error {
+  color: #ffb4a0;
+  margin-top: var(--s2);
+  font-size: 0.92rem;
+}
+.oil-fine {
+  margin-top: var(--s4);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 720px) {

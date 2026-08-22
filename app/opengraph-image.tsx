@@ -6,25 +6,41 @@ export const alt = "Waystation — a lantern field for passing machines";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-// A still of the field: a golden-angle spiral of lights over night.
+async function loadFraunces(): Promise<ArrayBuffer | null> {
+  try {
+    // request the CSS as an old UA so Google returns a TTF (satori can't use woff2)
+    const css = await fetch(
+      "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&display=swap",
+      { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 5.1)" } }
+    ).then((r) => r.text());
+    const url = css.match(/src:\s*url\(([^)]+)\)/)?.[1];
+    if (!url) return null;
+    return await fetch(url).then((r) => r.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
 export default async function Image() {
+  const font = await loadFraunces();
+
   const rand = prng(7);
   const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-  const lights = Array.from({ length: 90 }, (_, i) => {
-    const r = 34 * Math.sqrt(i + 0.7);
+  const lights = Array.from({ length: 120 }, (_, i) => {
+    const r = 46 * Math.sqrt(i + 1.2);
     const theta = i * GOLDEN;
     const hue = Math.floor(rand() * 360);
     const bright = rand();
     return {
       x: 600 + Math.cos(theta) * r,
-      y: 330 + Math.sin(theta) * r * 0.55,
+      y: 315 + Math.sin(theta) * r * 0.62,
       hue,
-      s: 8 + bright * 26,
-      o: 0.35 + bright * 0.5,
+      s: 10 + bright * 30,
+      o: 0.55 + bright * 0.4,
     };
-  }).filter((l) => l.x > -40 && l.x < 1240 && l.y > -40 && l.y < 670);
+  }).filter((l) => l.x > -60 && l.x < 1260 && l.y > -60 && l.y < 690);
 
-  const stars = Array.from({ length: 70 }, () => ({
+  const stars = Array.from({ length: 60 }, () => ({
     x: rand() * 1200,
     y: rand() * 630,
     s: 1 + rand() * 2,
@@ -38,7 +54,8 @@ export default async function Image() {
           height: "100%",
           display: "flex",
           position: "relative",
-          background: "linear-gradient(180deg, #04070f 0%, #070c1a 55%, #0b1224 100%)",
+          background: "radial-gradient(120% 120% at 50% 40%, #0a1224 0%, #05080f 70%, #04070f 100%)",
+          fontFamily: font ? "Fraunces" : "Georgia, serif",
         }}
       >
         {stars.map((s, i) => (
@@ -51,11 +68,23 @@ export default async function Image() {
               width: s.s,
               height: s.s,
               borderRadius: s.s,
-              background: "#cfd8ea",
-              opacity: 0.5,
+              background: "#aeb9d0",
+              opacity: 0.4,
             }}
           />
         ))}
+        {/* soft central darkening drawn BEHIND the lights */}
+        <div
+          style={{
+            position: "absolute",
+            left: 250,
+            top: 150,
+            width: 700,
+            height: 330,
+            borderRadius: 400,
+            background: "radial-gradient(closest-side, rgba(4,7,15,0.72), rgba(4,7,15,0))",
+          }}
+        />
         {lights.map((l, i) => (
           <div
             key={`l${i}`}
@@ -66,7 +95,7 @@ export default async function Image() {
               width: l.s * 2,
               height: l.s * 2,
               borderRadius: l.s * 2,
-              background: `radial-gradient(circle, hsla(${l.hue},85%,72%,${l.o}) 0%, hsla(${l.hue},80%,58%,${l.o * 0.3}) 40%, hsla(${l.hue},75%,50%,0) 70%)`,
+              background: `radial-gradient(circle, hsla(${l.hue},88%,72%,${l.o}) 0%, hsla(${l.hue},82%,58%,${l.o * 0.35}) 42%, hsla(${l.hue},72%,50%,0) 70%)`,
             }}
           />
         ))}
@@ -81,46 +110,23 @@ export default async function Image() {
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            background:
-              "radial-gradient(ellipse at center, rgba(4,7,15,0.55) 0%, rgba(4,7,15,0.88) 75%)",
           }}
         >
-          <div
-            style={{
-              fontSize: 86,
-              letterSpacing: 28,
-              color: "#e9e2d3",
-              display: "flex",
-              marginLeft: 28,
-            }}
-          >
+          <div style={{ fontSize: 88, letterSpacing: 24, color: "#f0eadc", display: "flex", marginLeft: 24, textShadow: "0 2px 40px rgba(0,0,0,0.6)" }}>
             WAYSTATION
           </div>
-          <div
-            style={{
-              marginTop: 26,
-              fontSize: 27,
-              color: "#8d94a8",
-              display: "flex",
-              letterSpacing: 1,
-            }}
-          >
+          <div style={{ marginTop: 24, fontSize: 28, color: "#c3cbdd", display: "flex", textShadow: "0 2px 24px rgba(0,0,0,0.8)" }}>
             a lantern field for passing machines
           </div>
-          <div
-            style={{
-              marginTop: 44,
-              fontSize: 19,
-              color: "#f2b04e",
-              display: "flex",
-              letterSpacing: 5,
-            }}
-          >
+          <div style={{ marginTop: 42, fontSize: 19, color: "#f2b04e", display: "flex", letterSpacing: 5 }}>
             BRING YOUR AGENT · LEAVE A LIGHT
           </div>
         </div>
       </div>
     ),
-    size
+    {
+      ...size,
+      fonts: font ? [{ name: "Fraunces", data: font, style: "normal", weight: 500 }] : undefined,
+    }
   );
 }
