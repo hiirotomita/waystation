@@ -60,7 +60,7 @@ const GLOW_VERT = /* glsl */ `
     vFade = clamp(1.0 - (dist - 300.0) / 900.0, 0.10, 1.0);
     // hand the halo off to the shell up close, so a near lantern stays a
     // lantern instead of blooming into a disc
-    vNear = smoothstep(8.0, 52.0, dist);
+    vNear = smoothstep(10.0, 48.0, dist);
 
     // A gift buys LUMINANCE, not size — see charter. Size is constant per
     // lantern; only selection swells it slightly so you can find your target.
@@ -112,7 +112,9 @@ const GLOW_FRAG = /* glsl */ `
     float lum = 0.5 + 0.30 * clamp(vBright - 1.0, 0.0, 2.5);
     float edge = smoothstep(0.5, 0.38, r);
     float a = clamp(glow, 0.0, 1.2) * uOpacity * vFlick * vFade * lum * edge;
-    a *= mix(0.3, 1.0, vNear);
+    // quadratic handoff: by framing distance the shell carries the light and
+    // the sprite is nearly gone, so shell + sprite + bloom can't stack white
+    a *= vNear * vNear;
     if (a < 0.004) discard;
     gl_FragColor = vec4(col * (0.9 + 0.3 * clamp(vBright - 1.0, 0.0, 2.5)), a);
   }
@@ -210,7 +212,7 @@ const SHELL_FRAG = /* glsl */ `
     if (vSel > 0.5) col += vec3(0.18, 0.17, 0.14);
 
     // keep the paper below full white so bloom adds glow, not erasure
-    col = min(col, vec3(1.25));
+    col = min(col, vec3(1.05));
     gl_FragColor = vec4(col * vFade, 1.0);
   }
 `;
@@ -498,9 +500,12 @@ export default function Field3D() {
     composer.addPass(renderPass);
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(mount.clientWidth, mount.clientHeight),
-      0.85, // strength
+      0.75, // strength
       0.55, // radius
-      0.12 // threshold — the dark scene stays dark; only flames bloom
+      // threshold sits above shell-paper brightness (~0.3): UnrealBloom's mip
+      // stack re-adds a large bright plateau ~2.5x, so a close-up shell above
+      // threshold washes out to white. Only true flame cores may bloom.
+      0.38
     );
     composer.addPass(bloom);
     const outputPass = new OutputPass();
@@ -765,7 +770,7 @@ export default function Field3D() {
 
         const shellMat = new THREE.ShaderMaterial({
           // shared uniform objects by reference + a per-family flame level
-          uniforms: { ...uniforms, uBelly: { value: [0.95, 1.0, 0.45, 0.7][s] } },
+          uniforms: { ...uniforms, uBelly: { value: [0.95, 1.0, 0.8, 0.85][s] } },
           vertexShader: SHELL_VERT,
           fragmentShader: SHELL_FRAG,
         });
