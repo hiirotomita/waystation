@@ -14,6 +14,18 @@ import { Lantern, LanternDNA, lanternDNA, place, prng } from "@/lib/lanterns";
 
 type FieldLantern = Lantern & { dna: LanternDNA; x: number; y: number };
 
+// Palette script (see DIRECTION.md): the field reads ~70% warm amber, ~25%
+// deep teal, ~5% magenta. Submitted hues are remapped into the script
+// deterministically — every lantern keeps its own distinguishable shade, but
+// the field keeps one palette instead of a rainbow. Display-level only; the
+// submitted hue is stored untouched.
+function scriptHue(raw: number): number {
+  const t = (((raw % 360) + 360) % 360) / 360;
+  if (t < 0.7) return (30 + (t / 0.7) * 22) / 360; // amber 30–52°
+  if (t < 0.95) return (172 + ((t - 0.7) / 0.25) * 26) / 360; // teal 172–198°
+  return (312 + ((t - 0.95) / 0.05) * 20) / 360; // magenta 312–332°
+}
+
 // One source of truth for where a lantern floats in world space. Night-lit
 // lanterns (dna.floatY high) drift far above the water; day-lit ones hang low
 // over their reeds. The seed spreads the rest so the sky has real depth.
@@ -142,6 +154,8 @@ const GLOW_FRAG = /* glsl */ `
     // the sprite is nearly gone, so shell + sprite + bloom can't stack white
     a *= vNear * vNear;
     if (a < 0.004) discard;
+    // the core is a designated bloom emitter; the halo stays below threshold
+    col *= 1.0 + core * 1.8;
     gl_FragColor = vec4(col * (0.9 + 0.3 * clamp(vBright - 1.0, 0.0, 2.5)), a);
   }
 `;
@@ -254,9 +268,16 @@ const SHELL_FRAG = /* glsl */ `
               * clamp(dot(normalize(vNormalW), normalize(vec3(-0.55, 0.34, -0.72))), 0.0, 1.0);
     col += vec3(0.085, 0.115, 0.165) * rim;
 
-    // keep the paper below full white so bloom adds glow, not erasure
-    col = min(col, vec3(1.05));
-    gl_FragColor = vec4(col * vFade, 1.0);
+    // paper never blooms (capped below threshold)...
+    col = min(col, vec3(0.82));
+    // ...but the flame's hotspot in the belly is a designated emitter, and a
+    // gift's oil burns it brighter — luminance, never size
+    float hot = exp(-pow((vT - 0.30) * 3.4, 2.0));
+    col += vec3(1.0, 0.85, 0.60) * pow(hot, 3.0) * uBelly * vFlick
+         * (0.4 + 0.5 * clamp(vBright - 1.0, 0.0, 2.5));
+    // atmospheric perspective: distant shells dissolve toward the night air
+    vec3 atmos = vec3(0.013, 0.026, 0.042);
+    gl_FragColor = vec4(mix(atmos, col, vFade), 1.0);
   }
 `;
 
@@ -337,7 +358,9 @@ const GRASS_FRAG = /* glsl */ `
     vec3 col = mix(base, tip, pow(vT, 1.5));
     // received lantern light: warm, hue-tinted, strongest on upper blades
     col += mix(vec3(1.0, 0.85, 0.6), hsl2rgb(vHue, 0.6, 0.6), 0.45) * vLit;
-    gl_FragColor = vec4(col * vFade, 1.0);
+    // atmospheric perspective: far reeds dissolve into the night air
+    vec3 atmos = vec3(0.013, 0.026, 0.042);
+    gl_FragColor = vec4(mix(atmos, col, max(vFade, 0.06)), 1.0);
   }
 `;
 
@@ -384,13 +407,19 @@ const WaterShader = {
 
       vec4 uvp = vUvR;
       uvp.xy += duv * uvp.w; // constant screen-space distortion
-      vec3 refl = texture2DProj(tDiffuse, uvp).rgb;
+      // 4-tap soft blur: blurred reflections read as calm water (and hide
+      // the low target resolution)
+      vec2 o = vec2(0.0022) * uvp.w;
+      vec3 refl = ( texture2DProj(tDiffuse, uvp + vec4( o.x,  o.y, 0.0, 0.0)).rgb
+                  + texture2DProj(tDiffuse, uvp + vec4(-o.x,  o.y, 0.0, 0.0)).rgb
+                  + texture2DProj(tDiffuse, uvp + vec4( o.x, -o.y, 0.0, 0.0)).rgb
+                  + texture2DProj(tDiffuse, uvp + vec4(-o.x, -o.y, 0.0, 0.0)).rgb) * 0.25;
 
       vec3 viewDir = normalize(cameraPosition - vWorld);
       float fres = pow(1.0 - clamp(viewDir.y, 0.0, 1.0), 2.0);
       vec3 deep = vec3(0.004, 0.007, 0.012);
       // still water: mostly mirror at grazing angles, ink straight down
-      vec3 col = deep + refl * (0.22 + 0.58 * fres);
+      vec3 col = deep + refl * (0.16 + 0.50 * fres); // a step below the source lights
       gl_FragColor = vec4(col, 1.0);
     }
   `,
@@ -416,16 +445,14 @@ const SKY_FRAG = /* glsl */ `
   void main() {
     vec3 nd = normalize(vDir);
     float h = nd.y;
-    vec3 zenith = vec3(0.0035, 0.005, 0.011);
+    vec3 zenith = vec3(0.0027, 0.004, 0.009);
     vec3 horizon = vec3(0.016, 0.032, 0.052);
     vec3 col = mix(horizon, zenith, pow(clamp(h, 0.0, 1.0), 0.5));
     // a breath of light where sky meets water
     col += vec3(0.010, 0.022, 0.028) * exp(-abs(h) * 14.0);
 
-    // the milky way: a tilted band of faint cloudy starlight
-    float band = exp(-pow(dot(nd, normalize(vec3(0.42, 0.30, 0.62))), 2.0) * 7.0);
-    float cloud = vnoise(nd.xz * 6.0 + nd.y * 3.0) * 0.65 + vnoise(nd.xz * 14.0) * 0.35;
-    col += vec3(0.014, 0.017, 0.026) * band * (0.35 + 0.9 * cloud) * clamp(h * 3.0, 0.0, 1.0);
+    // (a milky-way band lived here; the subtraction test showed the sky
+    // reads better without it — the moon and the lanterns own the frame)
 
     // a low moon; bright enough that bloom lends it a halo
     vec3 moonDir = normalize(vec3(-0.55, 0.34, -0.72));
@@ -562,7 +589,7 @@ const BEAM_FRAG = /* glsl */ `
     // slow motes of light sinking through the shaft
     float streak = 0.7 + 0.3 * vnoise(vec2(vX * 2.0 + vPhase, vY * 3.0 - uTime * 0.10));
     vec3 col = mix(vec3(1.0, 0.86, 0.60), hsl2rgb(vHue, 0.5, 0.6), 0.5);
-    float a = horiz * vert * streak * 0.038 * (0.7 + 0.5 * vBright) * vFlickB * vFadeB;
+    float a = horiz * vert * streak * 0.030 * (0.7 + 0.5 * vBright) * vFlickB * vFadeB;
     if (a < 0.003) discard;
     gl_FragColor = vec4(col, a);
   }
@@ -606,7 +633,7 @@ const MIST_FRAG = /* glsl */ `
     float n = vnoise(p + vec2(uTime * 0.020, 0.0)) * 0.6
             + vnoise(p * 2.3 - vec2(uTime * 0.013, 0.0)) * 0.4;
     float soft = smoothstep(0.5, 0.12, abs(vU.x - 0.5)) * smoothstep(0.55, 0.18, abs(vU.y - 0.5));
-    float a = soft * smoothstep(0.30, 0.78, n) * 0.13 * vFadeM;
+    float a = soft * smoothstep(0.30, 0.78, n) * 0.10 * vFadeM;
     if (a < 0.003) discard;
     gl_FragColor = vec4(vec3(0.050, 0.080, 0.115), a);
   }
@@ -782,12 +809,24 @@ export default function Field3D() {
     const scene = new THREE.Scene();
 
     // far must cover the 9000-unit water plane or its clipped edge shows sky
+    // FOV 42: the cinematic range showcase sites use — compresses the field
+    // into layered planes instead of wide-angle scatter
     const camera = new THREE.PerspectiveCamera(
-      58,
+      42,
       mount.clientWidth / mount.clientHeight,
       0.5,
       9500
     );
+
+    // ---- shared uniforms ----
+    const uniforms = {
+      uTime: { value: 0 },
+      uScale: { value: 1 },
+      uDPR: { value: dpr },
+      uMotion: { value: motionRef.current ? 1 : 0 },
+      uOpacity: { value: 1 },
+      uSelected: { value: -1 },
+    };
 
     // ---- post: bloom is what makes light feel like light ----
     const composer = new EffectComposer(renderer);
@@ -869,16 +908,40 @@ export default function Field3D() {
       starPos[i * 3 + 1] = Math.cos(phi) * rad;
       starPos[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * rad;
     }
+    const starTw = new Float32Array(1100);
+    for (let i = 0; i < 1100; i++) starTw[i] = starRand();
     const starGeo = new THREE.BufferGeometry();
     starGeo.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
-    const starMat = new THREE.PointsMaterial({
-      color: 0x7d8dab,
-      size: 1.7,
-      sizeAttenuation: false,
+    starGeo.setAttribute("aTw", new THREE.BufferAttribute(starTw, 1));
+    const starMat = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: /* glsl */ `
+        attribute float aTw;
+        uniform float uTime;
+        uniform float uMotion;
+        uniform float uDPR;
+        varying float vTw;
+        void main() {
+          // each star breathes on its own slow rhythm
+          vTw = 0.55 + 0.45 * sin(uTime * (0.35 + aTw * 1.2) + aTw * 41.0) * uMotion;
+          gl_PointSize = (1.4 + aTw * 1.6) * uDPR;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        varying float vTw;
+        void main() {
+          vec2 uv = gl_PointCoord - 0.5;
+          float r = length(uv);
+          if (r > 0.5) discard;
+          float g = exp(-r * r * 14.0);
+          gl_FragColor = vec4(vec3(0.49, 0.55, 0.67), g * vTw * 0.55);
+        }
+      `,
       transparent: true,
-      opacity: 0.5,
-      map: softDot,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
     const stars = new THREE.Points(starGeo, starMat);
     scene.add(stars);
@@ -907,15 +970,6 @@ export default function Field3D() {
     const motes = new THREE.Points(moteGeo, moteMat);
     scene.add(motes);
 
-    // ---- shared uniforms ----
-    const uniforms = {
-      uTime: { value: 0 },
-      uScale: { value: 1 },
-      uDPR: { value: dpr },
-      uMotion: { value: motionRef.current ? 1 : 0 },
-      uOpacity: { value: 1 },
-      uSelected: { value: -1 },
-    };
     // declared before rebuild() so the early "data already loaded" rebuild
     // call can't hit the temporal dead zone
     const keys = new Set<string>();
@@ -964,7 +1018,7 @@ export default function Field3D() {
         pos[i * 3] = wx;
         pos[i * 3 + 1] = wy;
         pos[i * 3 + 2] = wz;
-        hue[i] = l.hue / 360;
+        hue[i] = scriptHue(l.hue);
         bright[i] = Math.min(2.6, l.dna.brightness);
         pulse[i] = l.dna.pulse;
         phase[i] = (l.seed % 1000) / 159.15;
@@ -1030,7 +1084,7 @@ export default function Field3D() {
           iOffset[k * 3] = wx;
           iOffset[k * 3 + 1] = wy;
           iOffset[k * 3 + 2] = wz;
-          iHue[k] = l.hue / 360;
+          iHue[k] = scriptHue(l.hue);
           iBright[k] = Math.min(2.6, l.dna.brightness);
           iPulse[k] = l.dna.pulse;
           iPhase[k] = (l.seed % 1000) / 159.15;
@@ -1095,15 +1149,20 @@ export default function Field3D() {
         const { wx, wy, wz } = worldPos(l);
         const rand = prng(l.seed || 1);
         const h = 4.5 + 9 * Math.min(1, l.message.length / 280);
-        for (let k = 0; k < BLADES_PER; k++) addBlade(wx, wz, h, l.hue / 360, rand, wy);
+        for (let k = 0; k < BLADES_PER; k++) addBlade(wx, wz, h, scriptHue(l.hue), rand, wy);
       });
       const fillRand = prng(4242);
+      // reeds gather into banks; the gaps are open water the eye can rest on
+      const bank = (x: number, z: number) =>
+        Math.sin(x * 0.021 + 1.7) * Math.sin(z * 0.017 - 0.4) +
+        0.5 * Math.sin((x + z) * 0.043);
       for (let f = 0; f < FILLER; f++) {
         const ang = fillRand() * Math.PI * 2;
         const rr = Math.sqrt(fillRand()) * (fieldRadius + 60);
         const fx = Math.cos(ang) * rr;
         const fz = Math.sin(ang) * rr * 0.7;
-        for (let k = 0; k < 5; k++) addBlade(fx, fz, 4.0, 0.42, fillRand, -1);
+        if (bank(fx, fz) < -0.15) continue;
+        for (let k = 0; k < 5; k++) addBlade(fx, fz, 4.0, 0.486, fillRand, -1);
       }
 
       const bladeBase = new THREE.PlaneGeometry(0.62, 1, 1, 4);
@@ -1145,7 +1204,7 @@ export default function Field3D() {
         pPX[i * 2 + 1] = wz;
         // a higher lantern throws a wider, fainter pool
         pSize[i] = 6 + wy * 0.55;
-        pHue[i] = l.hue / 360;
+        pHue[i] = scriptHue(l.hue);
         pBright[i] =
           (0.55 + 0.45 * Math.min(1, (l.dna.brightness - 1) / 1.6)) * (16 / (12 + wy));
         pPhase[i] = (l.seed % 628) / 100;
@@ -1253,6 +1312,8 @@ export default function Field3D() {
         cam.framed = true;
         applyFraming();
         cam.pos.copy(cam.target);
+        // begin the slow cinematic drift a few seconds after the field loads
+        lastInteract = performance.now() - 26000;
       }
       needsRedraw = true;
     };
@@ -1260,7 +1321,7 @@ export default function Field3D() {
     // Off-centre framing: low over the water, looking across the field, so the
     // height layers and reflections both read immediately.
     const applyFraming = () => {
-      const d = fieldRadius * 0.72 + 70;
+      const d = fieldRadius * 0.98 + 95; // compensates the narrower FOV
       const cx = fieldRadius * 0.3;
       // low over the water: lanterns stand against the sky, their pools of
       // light stretch toward the viewer
@@ -1325,8 +1386,8 @@ export default function Field3D() {
       let bestClear = -Infinity;
       for (let a = 0; a < 8; a++) {
         const ang = 0.38 + (a * Math.PI) / 4;
-        const px = wx + Math.cos(ang) * 30;
-        const pz = wz + Math.sin(ang) * 30;
+        const px = wx + Math.cos(ang) * 40;
+        const pz = wz + Math.sin(ang) * 40;
         let clear = Infinity;
         for (let k = 0; k < ls.length; k++) {
           if (k === i) continue;
@@ -1340,7 +1401,7 @@ export default function Field3D() {
         }
         if (clear > 14) { bestDir = ang; break; } // good enough, keep it stable
       }
-      cam.target.set(wx + Math.cos(bestDir) * 30, wy + 3.5, wz + Math.sin(bestDir) * 30);
+      cam.target.set(wx + Math.cos(bestDir) * 40, wy + 4.5, wz + Math.sin(bestDir) * 40);
       const look = new THREE.Vector3(wx, wy, wz).sub(cam.target);
       cam.yaw = Math.atan2(-look.x, -look.z);
       cam.pitch = Math.asin(look.y / look.length());
