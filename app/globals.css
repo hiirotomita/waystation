@@ -646,9 +646,13 @@ code.inline {
   list-style: none;
   padding: 0;
 }
+/* .page h2 specificity (0,1,1) would otherwise override this caption */
+.page h2.chron-day,
 .chron-day {
   font-family: var(--mono);
   font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.2;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);

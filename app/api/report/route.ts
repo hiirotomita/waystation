@@ -46,31 +46,27 @@ export async function POST(req: Request) {
     ok: boolean;
     error?: string;
     reports?: number;
+    urgent?: number;
+    hidden?: boolean;
     already_reported?: boolean;
     noop?: boolean;
   };
 
-  // A single credible "harmful/illegal" report (doxxing, threats, CSAM) hides
-  // the lantern immediately pending review — these can't wait for four
-  // reporters on a low-traffic site.
+  // The RPC decides hiding atomically (respecting report_immune): 4 distinct
+  // reporters, OR 2 distinct "harmful/illegal" reporters. The route only
+  // alerts — it never hides out-of-band (that bypassed report_immune).
   const urgent = reason === "harmful_illegal";
-  if (result.ok && urgent && !result.already_reported && !result.noop) {
-    await admin.from("lanterns").update({ hidden: true }).eq("id", body.id);
-    await admin.from("moderation_log").insert({
-      action: "urgent_hide",
-      lantern_id: body.id,
-      note: "single harmful/illegal report",
-    });
-    await alertOperator(
-      `URGENT: a lantern was reported as harmful/illegal and hidden pending review (${body.id}). Check /admin now.`
-    );
-  } else if (result.ok && typeof result.reports === "number") {
-    // Alert on the first report and on auto-hide, so vile content is
-    // discoverable at 4am instead of via a stranger's tweet.
-    if (result.reports === 1) {
+  if (result.ok && !result.already_reported && !result.noop) {
+    if (result.hidden) {
+      await alertOperator(
+        `a lantern was hidden pending review (${body.id}${urgent ? ", reported as harmful/illegal" : ""}). Check /admin.`
+      );
+    } else if (urgent) {
+      await alertOperator(
+        `URGENT: a lantern was reported as harmful/illegal (${body.id}). One more urgent report hides it — check /admin now.`
+      );
+    } else if (result.reports === 1) {
       await alertOperator(`a lantern was reported (${body.id}). Review /admin.`);
-    } else if (result.reports >= 4) {
-      await alertOperator(`a lantern was auto-hidden after ${result.reports} reports (${body.id}). Review /admin.`);
     }
   }
   // Never echo the exact distinct-report count to anonymous callers (it would

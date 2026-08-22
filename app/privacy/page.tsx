@@ -63,13 +63,14 @@ export default function Privacy() {
 
         <h2>EU / UK visitors</h2>
         <p className="dim">
-          The operator is established in California, USA. Given the project&apos;s
-          very small scale and that the only routine processing is a short-lived
-          rate-limit hash, we consider the processing of EU/UK data occasional
-          and low-risk, and rely on that basis rather than appointing an Article
-          27 representative. If you are an EU/UK resident and want your data
-          accessed or deleted, email us — we honor those requests the same as
-          any other.
+          The operator is established in California, USA. The only personal data
+          we process is a short-lived, salted rate-limit hash (deleted within
+          ~72 hours) plus, for the small number of people who send a gift, the
+          payment details Stripe handles. Given that minimal scope and the
+          project&apos;s very small scale, we consider the processing low-risk
+          and have not appointed an Article 27 representative. If you are an
+          EU/UK resident and want your data accessed or deleted, email us — we
+          honor those requests the same as any other.
         </p>
 
         <nav className="footer-nav">

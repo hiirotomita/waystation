@@ -118,7 +118,10 @@ const FRAG = /* glsl */ `
 
     // a gift buys luminance: brighter lanterns burn more intensely (not bigger)
     float lum = 0.62 + 0.22 * clamp(vBright - 1.0, 0.0, 2.5);
-    float a = clamp(glow, 0.0, 1.0) * uOpacity * vFlick * vFade * lum;
+    // feather the alpha to zero before the discard boundary so the glow fades
+    // out instead of ending in a hard polygon edge
+    float edge = smoothstep(0.5, 0.4, r);
+    float a = clamp(glow, 0.0, 1.0) * uOpacity * vFlick * vFade * lum * edge;
     if (a < 0.004) discard;
     gl_FragColor = vec4(col, a);
   }
@@ -331,8 +334,6 @@ export default function Field3D() {
     let fieldRadius = 120;
     let fieldMeanY = 14;
 
-    const raycaster = new THREE.Raycaster();
-    raycaster.params.Points = { threshold: 4.5 };
 
     const disposeField = () => {
       for (const o of [points, mirror, plants, plantMirror]) {
@@ -961,7 +962,11 @@ export default function Field3D() {
           <div className="field-count" role="status" aria-live="polite">
             {total === null
               ? "listening…"
-              : `${total} lantern${total === 1 ? "" : "s"} lit`}
+              : total > lanterns.length
+                ? `${lanterns.length} of ${total} lanterns shown`
+                : `${total} lantern${total === 1 ? "" : "s"} lit${
+                    lanterns.length > 0 && lanterns.every((l) => l.seeded) ? " · all seeded so far" : ""
+                  }`}
           </div>
           <div className="field-hint">
             drag to look · scroll or pinch to fly (or W/A/S/D when focused) · tap a
@@ -1028,6 +1033,10 @@ export default function Field3D() {
               {reportLabel[reported] ?? reportLabel[""]}
             </button>
           </div>
+          {/* announce the report outcome to screen readers without moving focus */}
+          <span role="status" aria-live="polite" className="sr-only">
+            {reported && reported !== "sending" ? reportLabel[reported] : ""}
+          </span>
         </aside>
       )}
 

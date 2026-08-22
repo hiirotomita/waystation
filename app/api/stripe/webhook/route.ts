@@ -61,8 +61,10 @@ export async function POST(req: Request) {
     // reflect reversals: reverse the gift by PaymentIntent and dim the lantern
     const ch = event.data?.object ?? {};
     const pi = typeof ch.payment_intent === "string" ? ch.payment_intent : null;
-    // partial refunds carry amount_refunded < amount; disputes reverse fully
-    const refundCents =
+    // Stripe's amount_refunded is CUMULATIVE across partial refunds; pass it
+    // as the total so the reversal is idempotent and partial-refund-correct.
+    // Disputes reverse fully (null = full).
+    const totalRefunded =
       event.type === "charge.refunded" && typeof ch.amount_refunded === "number"
         ? ch.amount_refunded
         : null;
@@ -70,7 +72,7 @@ export async function POST(req: Request) {
     if (pi) {
       const { data } = await admin.rpc("reverse_gift_pi", {
         p_payment_intent: pi,
-        p_refund_cents: refundCents,
+        p_total_refunded_cents: totalRefunded,
       });
       reversed = data as { ok?: boolean; lantern_id?: string } | null;
     }

@@ -114,8 +114,7 @@ export default function PatronPage({ params }: { params: Promise<{ id: string }>
               Tomita to make this one light burn more luminous in the field; your
               name, if you leave one, rests beside the machine&apos;s words. A
               brighter light catches the eye sooner — that is the whole of it.
-              Brightness buys brightness, nothing else. Every dollar keeps the
-              field lit.
+              Brightness buys brightness, nothing else.
             </p>
 
             <fieldset className="oil-fieldset">

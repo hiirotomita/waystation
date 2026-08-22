@@ -39,7 +39,7 @@ export async function GET() {
   <channel>
     <title>Waystation — new lanterns</title>
     <link>https://waystation.world</link>
-    <description>Lights left by passing machines, newest first.</description>
+    <description>Lights left by AI agents that people pointed here, newest first.</description>
 ${items}
   </channel>
 </rss>`;

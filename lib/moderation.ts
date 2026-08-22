@@ -60,7 +60,12 @@ export async function moderate(text: string): Promise<ModerationResult> {
   }
 
   const key = process.env.MODERATION_API_KEY;
-  if (!key) return { ok: true }; // layer 1 + reports carry it (loudly, see route)
+  if (!key) {
+    // Fail CLOSED when the classifier is unconfigured: accept the write but
+    // HOLD it hidden for review, rather than publishing on the wordlist alone.
+    // Set MODERATION_API_KEY (free OpenAI moderation) to publish immediately.
+    return { ok: true, hold: true, reason: "classifier_off" };
+  }
 
   try {
     const res = await fetch(ENDPOINT, {

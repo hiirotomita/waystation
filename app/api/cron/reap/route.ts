@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { dbAdmin } from "@/lib/db";
+import { alertOperator } from "@/lib/alert";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,9 @@ export async function GET(req: Request) {
   const { error } = await admin.rpc("reap_maintenance");
   if (error) {
     console.error("cron reap:", error.message);
+    await alertOperator(
+      `maintenance cron FAILED (${error.message}). rate_events/reports will grow until this runs — check the DB before it fills.`
+    );
     return NextResponse.json({ ok: false, error: "reap_failed" }, { status: 500 });
   }
   return NextResponse.json({ ok: true });

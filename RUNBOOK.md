@@ -71,11 +71,15 @@ preserved). Ask the admin API / a small script to upsert them.
 Open the Supabase dashboard → the project → **Resume**. The site 500s until
 it's resumed. Traffic keeps it warm; this only bites after a quiet week.
 
-## The classifier (OpenAI moderation) is down
+## The classifier (OpenAI moderation)
 
-By design, submissions are then **held for review** (accepted but hidden) and
-you get an alert per hold. Nothing vile publishes during an outage. Clear the
-backlog from `/admin` once it recovers, or just wait — it self-heals.
+The high-recall classifier is **fail-closed**: if `MODERATION_API_KEY` is unset
+OR the OpenAI endpoint is unreachable, new lanterns are **held for review**
+(accepted but hidden) and you get an alert per hold. Nothing publishes on the
+wordlist alone. So until you set the key, every stranger's lantern waits on
+`/admin` for you — safe, but the field won't grow on its own. Set
+`MODERATION_API_KEY` (free OpenAI moderation) to publish clean lanterns
+immediately. `/admin` shows the current classifier state.
 
 ## A gift was charged but the lantern didn't brighten
 
