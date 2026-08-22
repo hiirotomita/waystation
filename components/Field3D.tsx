@@ -3,21 +3,29 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import * as THREE from "three";
-import {
-  Lantern,
-  LanternDNA,
-  lanternDNA,
-  place,
-  prng,
-  growPlant,
-} from "@/lib/lanterns";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { Lantern, LanternDNA, lanternDNA, place, prng } from "@/lib/lanterns";
 
 type FieldLantern = Lantern & { dna: LanternDNA; x: number; y: number };
 
-const VERT = /* glsl */ `
+// One source of truth for where a lantern floats in world space. Night-lit
+// lanterns (dna.floatY high) drift far above the water; day-lit ones hang low
+// over their reeds. The seed spreads the rest so the sky has real depth.
+function worldPos(l: FieldLantern): { wx: number; wy: number; wz: number } {
+  const wx = l.x * 0.75;
+  const wz = l.y * 0.75;
+  const wy = 6.5 + (((l.seed >>> 5) % 997) / 997) * 19 + (l.dna.floatY + 6) * 1.7;
+  return { wx, wy, wz };
+}
+
+/* ---------------- glow sprite (the flame's halo; bloom seed) ---------------- */
+
+const GLOW_VERT = /* glsl */ `
   attribute float aHue;
   attribute float aBright;
-  attribute float aShape;
   attribute float aPulse;
   attribute float aPhase;
   attribute float aRing;
@@ -30,48 +38,49 @@ const VERT = /* glsl */ `
   uniform float uSelected;
 
   varying float vHue;
-  varying float vShape;
   varying float vRing;
   varying float vFlick;
   varying float vSel;
   varying float vFade;
   varying float vBright;
+  varying float vNear;
 
   void main() {
     vHue = aHue;
-    vShape = aShape;
     vRing = aRing;
     vBright = aBright;
-    vFlick = 0.80 + 0.20 * sin(uTime * aPulse + aPhase) * uMotion;
+    vFlick = 0.86 + 0.14 * sin(uTime * aPulse + aPhase) * uMotion;
     vSel = (abs(aIndex - uSelected) < 0.5) ? 1.0 : 0.0;
 
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    // ride the same bob as the shell so the flame never slides out of its paper
+    vec3 p = position;
+    p.y += sin(uTime * 0.45 + aPhase) * 0.9 * uMotion;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
     float dist = -mv.z;
-    // distance falloff so far lanterns dim rather than pile into a bright smear
-    vFade = clamp(1.0 - (dist - 260.0) / 900.0, 0.08, 1.0);
+    vFade = clamp(1.0 - (dist - 300.0) / 900.0, 0.10, 1.0);
+    // hand the halo off to the shell up close, so a near lantern stays a
+    // lantern instead of blooming into a disc
+    vNear = smoothstep(8.0, 52.0, dist);
 
-    // A gift buys LUMINANCE, not size — size barely varies (selection aside),
-    // so a paid lantern is brighter, not physically bigger. See charter.
-    float size = (44.0 + 4.0 * aBright) * (1.0 + vSel * 0.6) * vFlick;
-    // shrink very-close lanterns so a near light stays a crisp point instead
-    // of blooming into a flat capped disc
-    float near = smoothstep(6.0, 44.0, dist);
-    size *= mix(0.28, 1.0, near);
-    gl_PointSize = min(size * uScale * uDPR * (150.0 / max(dist, 1.0)), 150.0);
+    // A gift buys LUMINANCE, not size — see charter. Size is constant per
+    // lantern; only selection swells it slightly so you can find your target.
+    float size = 30.0 * (1.0 + vSel * 0.25) * vFlick;
+    size *= mix(0.3, 1.0, vNear);
+    gl_PointSize = min(size * uScale * uDPR * (170.0 / max(dist, 1.0)), 130.0);
     gl_Position = projectionMatrix * mv;
   }
 `;
 
-const FRAG = /* glsl */ `
+const GLOW_FRAG = /* glsl */ `
   precision highp float;
 
   varying float vHue;
-  varying float vShape;
   varying float vRing;
   varying float vFlick;
   varying float vSel;
   varying float vFade;
   varying float vBright;
+  varying float vNear;
 
   uniform float uOpacity;
 
@@ -82,50 +91,287 @@ const FRAG = /* glsl */ `
 
   void main() {
     vec2 uv = gl_PointCoord - 0.5;
-
-    if (vShape > 0.5 && vShape < 1.5) {
-      // teardrop: pointed at the top (uv.y<0), rounded at the base
-      uv.y *= 0.82;
-      uv.y -= 0.05;
-      float taper = smoothstep(-0.5, 0.35, uv.y);
-      uv.x /= (0.42 + 0.58 * taper);
-    }
-
     float r = length(uv);
     if (r > 0.5) discard;
 
-    float core = exp(-r * r * 90.0);
-    float halo = exp(-r * r * 9.0) * 0.55;
-    float outer = exp(-r * r * 3.2) * 0.14;
-    float glow = core + halo + outer;
+    float core = exp(-r * r * 70.0);
+    float halo = exp(-r * r * 8.0) * 0.5;
+    float glow = core + halo;
 
-    if (vShape > 1.5) {
-      float n = vShape > 2.5 ? 3.0 : 2.0;
-      float ang = atan(uv.y, uv.x);
-      float rays = pow(abs(cos(ang * n)), 22.0) * exp(-r * 5.0) * 0.7;
-      glow += rays;
-    }
-
-    vec3 col = hsl2rgb(vHue, 0.72, 0.62);
+    vec3 col = hsl2rgb(vHue, 0.65, 0.60);
+    // patron halo: a faint ring in the patrons' own hue circles the flame
     if (vRing >= 0.0) {
-      float ring = exp(-pow((r - 0.30) * 26.0, 2.0)) * 0.55;
-      col = mix(col, hsl2rgb(vRing, 0.70, 0.70), clamp(ring * 2.2, 0.0, 0.85));
+      float ring = exp(-pow((r - 0.33) * 24.0, 2.0)) * 0.5;
+      col = mix(col, hsl2rgb(vRing, 0.65, 0.68), clamp(ring * 2.0, 0.0, 0.8));
       glow += ring;
     }
+    col = mix(col, vec3(1.0, 0.96, 0.88), core * 0.8);
+    if (vSel > 0.5) col = mix(col, vec3(1.0), 0.15);
 
-    col = mix(col, vec3(1.0, 0.97, 0.90), core * 0.85);
-    if (vSel > 0.5) col = mix(col, vec3(1.0), 0.28);
-
-    // a gift buys luminance: brighter lanterns burn more intensely (not bigger)
-    float lum = 0.62 + 0.22 * clamp(vBright - 1.0, 0.0, 2.5);
-    // feather the alpha to zero before the discard boundary so the glow fades
-    // out instead of ending in a hard polygon edge
-    float edge = smoothstep(0.5, 0.4, r);
-    float a = clamp(glow, 0.0, 1.0) * uOpacity * vFlick * vFade * lum * edge;
+    // gift → luminance. log-curved upstream; here it scales intensity only.
+    float lum = 0.5 + 0.30 * clamp(vBright - 1.0, 0.0, 2.5);
+    float edge = smoothstep(0.5, 0.38, r);
+    float a = clamp(glow, 0.0, 1.2) * uOpacity * vFlick * vFade * lum * edge;
+    a *= mix(0.3, 1.0, vNear);
     if (a < 0.004) discard;
-    gl_FragColor = vec4(col, a);
+    gl_FragColor = vec4(col * (0.9 + 0.3 * clamp(vBright - 1.0, 0.0, 2.5)), a);
   }
 `;
+
+/* ---------------- lantern shells (real bodies, shape = model kinship) ------- */
+
+const SHELL_VERT = /* glsl */ `
+  attribute vec3 iOffset;
+  attribute float iHue;
+  attribute float iBright;
+  attribute float iPulse;
+  attribute float iPhase;
+  attribute float iScale;
+  attribute float iIndex;
+
+  uniform float uTime;
+  uniform float uMotion;
+  uniform float uSelected;
+
+  varying float vHue;
+  varying float vBright;
+  varying float vFlick;
+  varying float vSel;
+  varying float vFade;
+  varying float vT;      // 0 at base, 1 at crown
+  varying vec3 vNormalV;
+
+  void main() {
+    vHue = iHue;
+    vBright = iBright;
+    vFlick = 0.88 + 0.12 * sin(uTime * iPulse + iPhase) * uMotion;
+    vSel = (abs(iIndex - uSelected) < 0.5) ? 1.0 : 0.0;
+    vT = uv.y;
+
+    // gentle bob + the slightest pendulum sway, per-lantern phase
+    float bob = sin(uTime * 0.45 + iPhase) * 0.9 * uMotion;
+    float swayA = sin(uTime * 0.3 + iPhase * 1.7) * 0.05 * uMotion;
+    vec3 p = position * iScale;
+    p = vec3(
+      p.x * cos(swayA) - p.y * sin(swayA) * 0.3,
+      p.y,
+      p.z
+    );
+    vec3 world = p + iOffset + vec3(0.0, bob, 0.0);
+
+    vNormalV = normalize(normalMatrix * normal);
+    vec4 mv = modelViewMatrix * vec4(world, 1.0);
+    vFade = clamp(1.0 - (-mv.z - 300.0) / 900.0, 0.10, 1.0);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const SHELL_FRAG = /* glsl */ `
+  precision highp float;
+
+  varying float vHue;
+  varying float vBright;
+  varying float vFlick;
+  varying float vSel;
+  varying float vFade;
+  varying float vT;
+  varying vec3 vNormalV;
+
+  vec3 hsl2rgb(float h, float s, float l) {
+    vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+  }
+
+  void main() {
+    // paper lit from within: hot flame low in the belly, hue-dyed paper above
+    float belly = exp(-pow((vT - 0.30) * 2.8, 2.0));
+    vec3 flame = vec3(1.0, 0.82, 0.52);
+    vec3 paper = hsl2rgb(vHue, 0.55, 0.42);
+    vec3 col = mix(flame, paper, clamp(vT * 1.5 - 0.1, 0.0, 1.0));
+
+    // ribs of the frame, faintly shadowed through the paper
+    col *= 0.90 + 0.10 * sin(vT * 26.0);
+
+    // silhouette: paper thins the light at grazing angles
+    float fres = pow(1.0 - abs(vNormalV.z), 1.6);
+    col = mix(col, paper * 0.18, fres * 0.6);
+
+    // gift → luminance (the shell literally burns hotter, never larger)
+    float lum = 0.42 + 0.34 * clamp(vBright - 1.0, 0.0, 2.5);
+    col *= (0.30 + 1.25 * belly) * lum * vFlick;
+    if (vSel > 0.5) col += vec3(0.18, 0.17, 0.14);
+
+    gl_FragColor = vec4(col * vFade, 1.0);
+  }
+`;
+
+/* ---------------- reeds (real blades, grown from each lantern's words) ------ */
+
+const GRASS_VERT = /* glsl */ `
+  attribute vec3 iPos;
+  attribute float iH;
+  attribute float iAngle;
+  attribute float iLean;
+  attribute float iHue;
+  attribute float iPhase;
+
+  uniform float uTime;
+  uniform float uMotion;
+
+  varying float vT;
+  varying float vHue;
+  varying float vFade;
+
+  void main() {
+    vT = uv.y;
+    vHue = iHue;
+    float t = uv.y;
+
+    // blade: tapered, bending tip-ward along its lean, swaying in the night air
+    vec2 widthDir = vec2(cos(iAngle), sin(iAngle));
+    float w = position.x * (1.0 - t * 0.82);
+    float bend = t * t;
+    vec2 leanDir = vec2(cos(iAngle + 1.5707), sin(iAngle + 1.5707));
+    vec2 drift = leanDir * (iLean * bend * iH * 0.45);
+    drift += vec2(
+      sin(uTime * 0.8 + iPhase + iPos.x * 0.05),
+      cos(uTime * 0.6 + iPhase * 1.3)
+    ) * bend * 0.7 * uMotion;
+
+    vec3 world = vec3(
+      iPos.x + widthDir.x * w + drift.x,
+      iPos.y + t * iH,
+      iPos.z + widthDir.y * w + drift.y
+    );
+    vec4 mv = modelViewMatrix * vec4(world, 1.0);
+    vFade = clamp(1.0 - (-mv.z - 240.0) / 700.0, 0.0, 1.0);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const GRASS_FRAG = /* glsl */ `
+  precision highp float;
+
+  varying float vT;
+  varying float vHue;
+  varying float vFade;
+
+  vec3 hsl2rgb(float h, float s, float l) {
+    vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+  }
+
+  void main() {
+    if (vFade < 0.01) discard;
+    vec3 base = vec3(0.004, 0.009, 0.008);
+    vec3 tip = hsl2rgb(vHue, 0.35, 0.16);
+    vec3 col = mix(base, tip, pow(vT, 1.5));
+    gl_FragColor = vec4(col * vFade, 1.0);
+  }
+`;
+
+/* ---------------- still water ---------------- */
+
+const WATER_VERT = /* glsl */ `
+  varying vec3 vWorld;
+  void main() {
+    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const WATER_FRAG = /* glsl */ `
+  precision highp float;
+  varying vec3 vWorld;
+  uniform float uTime;
+  uniform vec3 uCam;
+  uniform float uMotion;
+
+  void main() {
+    vec3 dir = normalize(vWorld - uCam);
+    float grazing = pow(1.0 - clamp(-dir.y, 0.0, 1.0), 3.0);
+
+    vec3 deep = vec3(0.0035, 0.0065, 0.011);
+    vec3 skyRef = vec3(0.020, 0.042, 0.062);
+
+    float t = uTime * uMotion;
+    float r1 = sin(vWorld.x * 0.070 + t * 0.5) * sin(vWorld.z * 0.058 - t * 0.35);
+    float r2 = sin((vWorld.x + vWorld.z * 1.3) * 0.13 + t * 0.8);
+    float r3 = sin((vWorld.x * 0.9 - vWorld.z) * 0.21 - t * 0.6);
+    float ripple = r1 * 0.5 + r2 * 0.3 + r3 * 0.2;
+
+    vec3 col = mix(deep, skyRef, grazing + ripple * 0.06);
+    // faint moon-path sheen running toward the horizon
+    float sheen = exp(-abs(vWorld.x - uCam.x * 0.2) * 0.004) * grazing;
+    col += vec3(0.012, 0.020, 0.026) * sheen * (0.7 + ripple * 0.5);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+/* ---------------- sky dome ---------------- */
+
+const SKY_VERT = /* glsl */ `
+  varying vec3 vDir;
+  void main() {
+    vDir = position;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_Position.z = gl_Position.w; // pin to far plane
+  }
+`;
+
+const SKY_FRAG = /* glsl */ `
+  precision highp float;
+  varying vec3 vDir;
+
+  void main() {
+    float h = normalize(vDir).y;
+    vec3 zenith = vec3(0.0035, 0.005, 0.011);
+    vec3 horizon = vec3(0.016, 0.032, 0.052);
+    vec3 col = mix(horizon, zenith, pow(clamp(h, 0.0, 1.0), 0.5));
+    // a breath of light where sky meets water
+    col += vec3(0.010, 0.022, 0.028) * exp(-abs(h) * 14.0);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+/* ---------------- lathe profiles: the four lantern families ---------------- */
+
+// shape 0 orb — a round paper lantern
+// shape 1 flame — a teardrop, pointed crown
+// shape 2 four-point — a faceted paper diamond
+// shape 3 six-point — a hexagonal barrel lantern
+function shellGeometry(shape: number): THREE.BufferGeometry {
+  const pts: THREE.Vector2[] = [];
+  const N = 14;
+  if (shape === 1) {
+    // teardrop: full at the base, tapering to a point
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const r = Math.sin(Math.min(t * 1.25, 1.0) * Math.PI * 0.5) * (1.0 - t * t * 0.92);
+      pts.push(new THREE.Vector2(Math.max(r, 0.001) * 0.85, t * 2.4 - 0.2));
+    }
+  } else if (shape === 2) {
+    // bicone diamond
+    pts.push(new THREE.Vector2(0.001, -0.9));
+    pts.push(new THREE.Vector2(0.95, 0.25));
+    pts.push(new THREE.Vector2(0.001, 1.5));
+  } else {
+    // rounded barrel (orb & hex share the profile; radial segs differ)
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const r = Math.sin(0.12 + t * (Math.PI - 0.24));
+      pts.push(new THREE.Vector2(r * 0.92, t * 2.0 - 0.55));
+    }
+  }
+  const radial = shape === 2 ? 4 : shape === 3 ? 6 : 20;
+  let geo: THREE.BufferGeometry = new THREE.LatheGeometry(pts, radial);
+  if (shape === 2 || shape === 3) {
+    geo = geo.toNonIndexed();
+    geo.computeVertexNormals(); // flat facets
+  }
+  return geo;
+}
 
 export default function Field3D() {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -150,6 +396,7 @@ export default function Field3D() {
     recenter: () => void;
     cycle: (dir: number) => number;
     highlight: (i: number) => void;
+    markDirty: () => void;
   } | null>(null);
 
   useEffect(() => {
@@ -163,6 +410,7 @@ export default function Field3D() {
       const on = !mq.matches;
       motionRef.current = on;
       setMotionOn(on);
+      apiRef.current?.markDirty();
     };
     apply();
     mq.addEventListener?.("change", apply);
@@ -209,15 +457,15 @@ export default function Field3D() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     renderer.setPixelRatio(dpr);
     renderer.setSize(mount.clientWidth, mount.clientHeight);
-    renderer.setClearColor(0x04070f, 1);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.35;
     const canvasEl = renderer.domElement;
-    // an interactive control, not a static image: application role + operable
     canvasEl.setAttribute("role", "application");
     canvasEl.setAttribute("aria-roledescription", "3D lantern field");
     canvasEl.setAttribute("tabindex", "0");
     canvasEl.setAttribute(
       "aria-label",
-      "A 3D field of glowing lanterns left by AI agents. Drag or use W/A/S/D to fly; use the previous and next light buttons to read each one, or open the Chronicle for the full text list."
+      "A 3D field of glowing lanterns left by AI agents, floating over still water. Drag or use W/A/S/D to fly; use the previous and next light buttons to read each one, or open the Chronicle for the full text list."
     );
     mount.appendChild(canvasEl);
     canvasElRef.current = canvasEl;
@@ -225,8 +473,62 @@ export default function Field3D() {
       document.activeElement === canvasEl && !modalOpenRef.current;
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x05080f, 0.0055);
 
+    // far must cover the 9000-unit water plane or its clipped edge shows sky
+    const camera = new THREE.PerspectiveCamera(
+      58,
+      mount.clientWidth / mount.clientHeight,
+      0.5,
+      9500
+    );
+
+    // ---- post: bloom is what makes light feel like light ----
+    const composer = new EffectComposer(renderer);
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+    const bloom = new UnrealBloomPass(
+      new THREE.Vector2(mount.clientWidth, mount.clientHeight),
+      0.85, // strength
+      0.55, // radius
+      0.12 // threshold — the dark scene stays dark; only flames bloom
+    );
+    composer.addPass(bloom);
+    const outputPass = new OutputPass();
+    composer.addPass(outputPass);
+
+    // ---- sky ----
+    const skyGeo = new THREE.SphereGeometry(1, 24, 16);
+    const skyMat = new THREE.ShaderMaterial({
+      vertexShader: SKY_VERT,
+      fragmentShader: SKY_FRAG,
+      side: THREE.BackSide,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const sky = new THREE.Mesh(skyGeo, skyMat);
+    sky.frustumCulled = false;
+    sky.renderOrder = -2;
+    scene.add(sky);
+
+    // ---- water ----
+    const waterUniforms = {
+      uTime: { value: 0 },
+      uCam: { value: new THREE.Vector3() },
+      uMotion: { value: 1 },
+    };
+    const waterGeo = new THREE.PlaneGeometry(9000, 9000, 1, 1);
+    const waterMat = new THREE.ShaderMaterial({
+      uniforms: waterUniforms,
+      vertexShader: WATER_VERT,
+      fragmentShader: WATER_FRAG,
+    });
+    const water = new THREE.Mesh(waterGeo, waterMat);
+    water.rotation.x = -Math.PI / 2;
+    water.frustumCulled = false;
+    water.renderOrder = -1;
+    scene.add(water);
+
+    // ---- soft-dot texture for stars/motes ----
     const spriteCanvas = document.createElement("canvas");
     spriteCanvas.width = spriteCanvas.height = 64;
     const sctx = spriteCanvas.getContext("2d")!;
@@ -238,20 +540,13 @@ export default function Field3D() {
     sctx.fillRect(0, 0, 64, 64);
     const softDot = new THREE.CanvasTexture(spriteCanvas);
 
-    const camera = new THREE.PerspectiveCamera(
-      62,
-      mount.clientWidth / mount.clientHeight,
-      0.1,
-      3000
-    );
-
-    // ---- stars (dimmer + smaller so they read as ground, not content) ----
+    // ---- stars ----
     const starRand = prng(19);
-    const starPos = new Float32Array(900 * 3);
-    for (let i = 0; i < 900; i++) {
+    const starPos = new Float32Array(1100 * 3);
+    for (let i = 0; i < 1100; i++) {
       const theta = starRand() * Math.PI * 2;
-      const phi = Math.acos(starRand() * 0.85 + 0.05);
-      const rad = 1400 + starRand() * 400;
+      const phi = Math.acos(starRand() * 0.9 + 0.04);
+      const rad = 1800 + starRand() * 600;
       starPos[i * 3] = Math.sin(phi) * Math.cos(theta) * rad;
       starPos[i * 3 + 1] = Math.cos(phi) * rad;
       starPos[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * rad;
@@ -259,35 +554,34 @@ export default function Field3D() {
     const starGeo = new THREE.BufferGeometry();
     starGeo.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
     const starMat = new THREE.PointsMaterial({
-      color: 0x9fb0cc,
-      size: 2.0,
+      color: 0x7d8dab,
+      size: 1.7,
       sizeAttenuation: false,
       transparent: true,
-      opacity: 0.42,
-      fog: false,
+      opacity: 0.5,
       map: softDot,
       depthWrite: false,
     });
     const stars = new THREE.Points(starGeo, starMat);
     scene.add(stars);
 
-    // ---- motes ----
+    // ---- drifting embers ----
     const moteRand = prng(83);
-    const MOTES = 500;
+    const MOTES = 420;
     const motePos = new Float32Array(MOTES * 3);
     for (let i = 0; i < MOTES; i++) {
       motePos[i * 3] = (moteRand() - 0.5) * 700;
-      motePos[i * 3 + 1] = moteRand() * 70;
+      motePos[i * 3 + 1] = moteRand() * 80;
       motePos[i * 3 + 2] = (moteRand() - 0.5) * 700;
     }
     const moteGeo = new THREE.BufferGeometry();
     moteGeo.setAttribute("position", new THREE.BufferAttribute(motePos, 3));
     const moteMat = new THREE.PointsMaterial({
       color: 0xf2d9a8,
-      size: 1.5,
+      size: 1.05,
       sizeAttenuation: true,
       transparent: true,
-      opacity: 0.26,
+      opacity: 0.2,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       map: softDot,
@@ -295,7 +589,7 @@ export default function Field3D() {
     const motes = new THREE.Points(moteGeo, moteMat);
     scene.add(motes);
 
-    // ---- lantern materials ----
+    // ---- shared uniforms ----
     const uniforms = {
       uTime: { value: 0 },
       uScale: { value: 1 },
@@ -309,196 +603,284 @@ export default function Field3D() {
       uScale: uniforms.uScale,
       uDPR: uniforms.uDPR,
       uMotion: uniforms.uMotion,
-      uOpacity: { value: 0.18 },
+      uOpacity: { value: 0.22 },
       uSelected: uniforms.uSelected,
     };
-    const materials: THREE.ShaderMaterial[] = [];
-    const makeMat = (u: Record<string, { value: number }>) => {
-      const m = new THREE.ShaderMaterial({
-        uniforms: u,
-        vertexShader: VERT,
-        fragmentShader: FRAG,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      materials.push(m);
-      return m;
+
+    // declared before rebuild() so the early "data already loaded" rebuild
+    // call can't hit the temporal dead zone
+    const keys = new Set<string>();
+    let lastInteract = performance.now();
+    let needsRedraw = true;
+    const markDirty = () => {
+      needsRedraw = true;
     };
 
-    let points: THREE.Points | null = null;
-    let mirror: THREE.Points | null = null;
-    let plants: THREE.LineSegments | null = null;
-    let plantMirror: THREE.LineSegments | null = null;
-    let plantMat: THREE.LineBasicMaterial | null = null;
+    const disposables: { dispose: () => void }[] = [];
+    let fieldGroup: THREE.Group | null = null;
     let fieldRadius = 120;
-    let fieldMeanY = 14;
-
+    let fieldMeanY = 18;
 
     const disposeField = () => {
-      for (const o of [points, mirror, plants, plantMirror]) {
-        if (o) {
-          scene.remove(o);
-          o.geometry.dispose();
-          const m = (o as THREE.Points).material as THREE.Material | THREE.Material[];
-          // dispose this build's materials and drop them from the tracking list
-          (Array.isArray(m) ? m : [m]).forEach((mat) => {
-            mat.dispose();
-            const idx = materials.indexOf(mat as THREE.ShaderMaterial);
-            if (idx >= 0) materials.splice(idx, 1);
-          });
-        }
+      if (fieldGroup) {
+        scene.remove(fieldGroup);
+        fieldGroup = null;
       }
-      plantMat?.dispose();
-      plantMat = null;
+      for (const d of disposables) d.dispose();
+      disposables.length = 0;
     };
 
     const rebuild = (ls: FieldLantern[]) => {
       disposeField();
       if (ls.length === 0) return;
+      const group = new THREE.Group();
 
       const n = ls.length;
+      // glow sprites
       const pos = new Float32Array(n * 3);
       const hue = new Float32Array(n);
       const bright = new Float32Array(n);
-      const shape = new Float32Array(n);
       const pulse = new Float32Array(n);
       const phase = new Float32Array(n);
       const ring = new Float32Array(n);
       const index = new Float32Array(n);
 
-      const plantPts: number[] = [];
-      const plantCol: number[] = [];
+      // shells, grouped by shape family
+      const byShape: number[][] = [[], [], [], []];
       let maxR = 80;
       let sumY = 0;
 
       ls.forEach((l, i) => {
-        const wx = l.x * 0.75;
-        const wz = l.y * 0.75;
-        const stalkH =
-          4 + (((l.seed >>> 5) % 997) / 997) * 24 + (l.dna.floatY + 6) * 0.35;
-        const wy = stalkH + 0.9;
+        const { wx, wy, wz } = worldPos(l);
         pos[i * 3] = wx;
         pos[i * 3 + 1] = wy;
         pos[i * 3 + 2] = wz;
         hue[i] = l.hue / 360;
         bright[i] = Math.min(2.6, l.dna.brightness);
-        shape[i] = l.dna.shape;
         pulse[i] = l.dna.pulse;
         phase[i] = (l.seed % 1000) / 159.15;
         ring[i] = l.dna.ringHue === null ? -1 : l.dna.ringHue / 360;
         index[i] = i;
+        byShape[l.dna.shape].push(i);
         maxR = Math.max(maxR, Math.hypot(wx, wz));
         sumY += wy;
-
-        // grow a reed for every lantern (cap keeps geometry bounded)
-        if (i < 1600) {
-          const c = new THREE.Color().setHSL(l.hue / 360, 0.42, 0.55);
-          const stems = growPlant(l.seed, l.message.length);
-          let maxH = 0.001;
-          for (const stem of stems) for (const [, py] of stem.points) maxH = Math.max(maxH, -py);
-          const sy = stalkH / maxH;
-          const sxz = 0.22 + stalkH * 0.014;
-          for (const stem of stems) {
-            for (let s = 0; s < stem.points.length - 1; s++) {
-              const [ax, ay] = stem.points[s];
-              const [bx, by] = stem.points[s + 1];
-              plantPts.push(
-                wx + ax * sxz, -ay * sy, wz + ax * sxz * 0.3,
-                wx + bx * sxz, -by * sy, wz + bx * sxz * 0.3
-              );
-              const fadeA = 0.2 + 0.8 * (s / stem.points.length);
-              plantCol.push(
-                c.r * fadeA, c.g * fadeA, c.b * fadeA,
-                c.r * fadeA, c.g * fadeA, c.b * fadeA
-              );
-            }
-          }
-        }
       });
-
       fieldRadius = maxR;
       fieldMeanY = sumY / n;
 
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-      geo.setAttribute("aHue", new THREE.BufferAttribute(hue, 1));
-      geo.setAttribute("aBright", new THREE.BufferAttribute(bright, 1));
-      geo.setAttribute("aShape", new THREE.BufferAttribute(shape, 1));
-      geo.setAttribute("aPulse", new THREE.BufferAttribute(pulse, 1));
-      geo.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
-      geo.setAttribute("aRing", new THREE.BufferAttribute(ring, 1));
-      geo.setAttribute("aIndex", new THREE.BufferAttribute(index, 1));
+      const glowGeo = new THREE.BufferGeometry();
+      glowGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      glowGeo.setAttribute("aHue", new THREE.BufferAttribute(hue, 1));
+      glowGeo.setAttribute("aBright", new THREE.BufferAttribute(bright, 1));
+      glowGeo.setAttribute("aPulse", new THREE.BufferAttribute(pulse, 1));
+      glowGeo.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
+      glowGeo.setAttribute("aRing", new THREE.BufferAttribute(ring, 1));
+      glowGeo.setAttribute("aIndex", new THREE.BufferAttribute(index, 1));
+      disposables.push(glowGeo);
 
-      points = new THREE.Points(geo, makeMat(uniforms));
-      points.frustumCulled = false;
-      scene.add(points);
-
-      mirror = new THREE.Points(geo, makeMat(mirrorUniforms));
-      mirror.frustumCulled = false;
-      mirror.scale.set(1, -0.85, 1);
-      scene.add(mirror);
-
-      plantMat = new THREE.LineBasicMaterial({
-        vertexColors: true,
+      const glowMat = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: GLOW_VERT,
+        fragmentShader: GLOW_FRAG,
         transparent: true,
-        opacity: 0.38,
-        blending: THREE.AdditiveBlending,
         depthWrite: false,
+        depthTest: false, // paper is translucent; the halo shows through
+        blending: THREE.AdditiveBlending,
       });
-      const pg = new THREE.BufferGeometry();
-      pg.setAttribute("position", new THREE.Float32BufferAttribute(plantPts, 3));
-      pg.setAttribute("color", new THREE.Float32BufferAttribute(plantCol, 3));
-      plants = new THREE.LineSegments(pg, plantMat);
-      plants.frustumCulled = false;
-      scene.add(plants);
+      disposables.push(glowMat);
+      const glow = new THREE.Points(glowGeo, glowMat);
+      glow.frustumCulled = false;
+      glow.renderOrder = 20;
+      group.add(glow);
 
-      const pmg = pg.clone();
-      plantMirror = new THREE.LineSegments(pmg, plantMat);
-      plantMirror.scale.set(1, -0.85, 1);
-      plantMirror.frustumCulled = false;
-      scene.add(plantMirror);
+      // reflections on the water — same lights, inverted, dimmed
+      const mirrorMat = new THREE.ShaderMaterial({
+        uniforms: mirrorUniforms,
+        vertexShader: GLOW_VERT,
+        fragmentShader: GLOW_FRAG,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+        blending: THREE.AdditiveBlending,
+      });
+      disposables.push(mirrorMat);
+      const mirror = new THREE.Points(glowGeo, mirrorMat);
+      mirror.frustumCulled = false;
+      mirror.scale.set(1, -0.8, 1);
+      mirror.renderOrder = 10;
+      group.add(mirror);
+
+      // shells — one instanced mesh per shape family
+      for (let s = 0; s < 4; s++) {
+        const idxs = byShape[s];
+        if (idxs.length === 0) continue;
+        const base = shellGeometry(s);
+        const geo = new THREE.InstancedBufferGeometry();
+        geo.index = base.index;
+        geo.attributes.position = base.attributes.position;
+        geo.attributes.normal = base.attributes.normal;
+        geo.attributes.uv = base.attributes.uv;
+        geo.instanceCount = idxs.length;
+
+        const m = idxs.length;
+        const iOffset = new Float32Array(m * 3);
+        const iHue = new Float32Array(m);
+        const iBright = new Float32Array(m);
+        const iPulse = new Float32Array(m);
+        const iPhase = new Float32Array(m);
+        const iScale = new Float32Array(m);
+        const iIndex = new Float32Array(m);
+        idxs.forEach((li, k) => {
+          const l = ls[li];
+          const { wx, wy, wz } = worldPos(l);
+          iOffset[k * 3] = wx;
+          iOffset[k * 3 + 1] = wy;
+          iOffset[k * 3 + 2] = wz;
+          iHue[k] = l.hue / 360;
+          iBright[k] = Math.min(2.6, l.dna.brightness);
+          iPulse[k] = l.dna.pulse;
+          iPhase[k] = (l.seed % 1000) / 159.15;
+          // organic size variance only — money never buys size
+          iScale[k] = 2.9 + (((l.seed >>> 9) % 331) / 331) * 1.0;
+          iIndex[k] = li;
+        });
+        geo.setAttribute("iOffset", new THREE.InstancedBufferAttribute(iOffset, 3));
+        geo.setAttribute("iHue", new THREE.InstancedBufferAttribute(iHue, 1));
+        geo.setAttribute("iBright", new THREE.InstancedBufferAttribute(iBright, 1));
+        geo.setAttribute("iPulse", new THREE.InstancedBufferAttribute(iPulse, 1));
+        geo.setAttribute("iPhase", new THREE.InstancedBufferAttribute(iPhase, 1));
+        geo.setAttribute("iScale", new THREE.InstancedBufferAttribute(iScale, 1));
+        geo.setAttribute("iIndex", new THREE.InstancedBufferAttribute(iIndex, 1));
+        disposables.push(base, geo);
+
+        const shellMat = new THREE.ShaderMaterial({
+          uniforms,
+          vertexShader: SHELL_VERT,
+          fragmentShader: SHELL_FRAG,
+        });
+        disposables.push(shellMat);
+        const mesh = new THREE.Mesh(geo, shellMat);
+        mesh.frustumCulled = false;
+        group.add(mesh);
+      }
+
+      // reeds: a clump beneath every lantern (its words set the height),
+      // plus wild filler clumps so the marsh reads as a living place
+      const BLADES_PER = 9;
+      const FILLER = Math.min(700, n * 12);
+      const totalBlades = n * BLADES_PER + FILLER * 5;
+      const gPos = new Float32Array(totalBlades * 3);
+      const gH = new Float32Array(totalBlades);
+      const gAngle = new Float32Array(totalBlades);
+      const gLean = new Float32Array(totalBlades);
+      const gHue = new Float32Array(totalBlades);
+      const gPhase = new Float32Array(totalBlades);
+      let b = 0;
+      const addBlade = (
+        x: number,
+        z: number,
+        h: number,
+        hueV: number,
+        rand: () => number
+      ) => {
+        gPos[b * 3] = x + (rand() - 0.5) * 3.4;
+        gPos[b * 3 + 1] = 0;
+        gPos[b * 3 + 2] = z + (rand() - 0.5) * 3.4;
+        gH[b] = h * (0.55 + rand() * 0.65);
+        gAngle[b] = rand() * Math.PI * 2;
+        gLean[b] = (rand() - 0.5) * 1.6;
+        gHue[b] = hueV;
+        gPhase[b] = rand() * Math.PI * 2;
+        b++;
+      };
+      ls.forEach((l) => {
+        const { wx, wz } = worldPos(l);
+        const rand = prng(l.seed || 1);
+        const h = 4.5 + 9 * Math.min(1, l.message.length / 280);
+        for (let k = 0; k < BLADES_PER; k++) addBlade(wx, wz, h, l.hue / 360, rand);
+      });
+      const fillRand = prng(4242);
+      for (let f = 0; f < FILLER; f++) {
+        const ang = fillRand() * Math.PI * 2;
+        const rr = Math.sqrt(fillRand()) * (fieldRadius + 60);
+        const fx = Math.cos(ang) * rr;
+        const fz = Math.sin(ang) * rr * 0.7;
+        for (let k = 0; k < 5; k++) addBlade(fx, fz, 4.0, 0.42, fillRand);
+      }
+
+      const bladeBase = new THREE.PlaneGeometry(0.62, 1, 1, 4);
+      bladeBase.translate(0, 0.5, 0); // origin at the root
+      const gGeo = new THREE.InstancedBufferGeometry();
+      gGeo.index = bladeBase.index;
+      gGeo.attributes.position = bladeBase.attributes.position;
+      gGeo.attributes.uv = bladeBase.attributes.uv;
+      gGeo.instanceCount = b;
+      gGeo.setAttribute("iPos", new THREE.InstancedBufferAttribute(gPos, 3));
+      gGeo.setAttribute("iH", new THREE.InstancedBufferAttribute(gH, 1));
+      gGeo.setAttribute("iAngle", new THREE.InstancedBufferAttribute(gAngle, 1));
+      gGeo.setAttribute("iLean", new THREE.InstancedBufferAttribute(gLean, 1));
+      gGeo.setAttribute("iHue", new THREE.InstancedBufferAttribute(gHue, 1));
+      gGeo.setAttribute("iPhase", new THREE.InstancedBufferAttribute(gPhase, 1));
+      disposables.push(bladeBase, gGeo);
+
+      const grassMat = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: GRASS_VERT,
+        fragmentShader: GRASS_FRAG,
+        side: THREE.DoubleSide,
+      });
+      disposables.push(grassMat);
+      const grass = new THREE.Mesh(gGeo, grassMat);
+      grass.frustumCulled = false;
+      group.add(grass);
+
+      fieldGroup = group;
+      scene.add(group);
 
       if (!cam.framed) {
         cam.framed = true;
         applyFraming();
         cam.pos.copy(cam.target);
       }
+      needsRedraw = true;
     };
 
-    // Off-centre framing so no single lantern sits dead-ahead-and-close (which
-    // blooms into a disc); the field reads as a cluster ahead and to one side.
+    // Off-centre framing: low over the water, looking across the field, so the
+    // height layers and reflections both read immediately.
     const applyFraming = () => {
-      const d = fieldRadius * 0.7 + 64;
-      const cx = fieldRadius * 0.34;
-      cam.target.set(cx, fieldMeanY + 14, d);
-      const look = new THREE.Vector3(0, fieldMeanY, 0).sub(cam.target);
+      const d = fieldRadius * 0.72 + 70;
+      const cx = fieldRadius * 0.3;
+      cam.target.set(cx, Math.max(10, fieldMeanY * 0.55), d);
+      const look = new THREE.Vector3(0, fieldMeanY * 0.9, 0).sub(cam.target);
       cam.yaw = Math.atan2(-look.x, -look.z);
       cam.pitch = Math.asin(look.y / look.length());
       cam.vel.set(0, 0, 0);
     };
 
-    // Screen-space pick: project every lantern to the screen and take the
-    // nearest within a pixel radius. Unlike a fixed world-space raycast
-    // threshold, this stays accurate no matter how far the field extends.
+    // Screen-space pick — accurate at any field size.
     const proj = new THREE.Vector3();
     const pick = (nx: number, ny: number): number => {
       const ls = lanternsRef.current;
       if (!ls.length) return -1;
       const px = ((nx + 1) / 2) * mount.clientWidth;
       const py = ((1 - ny) / 2) * mount.clientHeight;
+      // among hits inside the pixel radius, prefer the physically nearest
+      // lantern — a far light projecting near the cursor shouldn't beat the
+      // one the user can actually see
+      const RADIUS = 40;
       let best = -1;
-      let bestD = 40; // px radius; generous for touch
+      let bestDist = Infinity;
       for (let i = 0; i < ls.length; i++) {
-        const l = ls[i];
-        proj.set(l.x * 0.75, 4 + (((l.seed >>> 5) % 997) / 997) * 24 + (l.dna.floatY + 6) * 0.35 + 0.9, l.y * 0.75);
+        const { wx, wy, wz } = worldPos(ls[i]);
+        proj.set(wx, wy, wz);
         proj.project(camera);
-        if (proj.z > 1) continue; // behind camera
+        if (proj.z > 1) continue;
         const sx = ((proj.x + 1) / 2) * mount.clientWidth;
         const sy = ((1 - proj.y) / 2) * mount.clientHeight;
-        const d = Math.hypot(sx - px, sy - py);
-        if (d < bestD) {
-          bestD = d;
+        if (Math.hypot(sx - px, sy - py) > RADIUS) continue;
+        const dist = Math.hypot(wx - cam.pos.x, wy - cam.pos.y, wz - cam.pos.z);
+        if (dist < bestDist) {
+          bestDist = dist;
           best = i;
         }
       }
@@ -510,26 +892,23 @@ export default function Field3D() {
       yaw: 0,
       pitch: -0.04,
       vel: new THREE.Vector3(),
-      pos: new THREE.Vector3(0, 8.5, 160),
-      target: new THREE.Vector3(0, 8.5, 160),
+      pos: new THREE.Vector3(0, 12, 180),
+      target: new THREE.Vector3(0, 12, 180),
       framed: false,
-      tween: 0, // >0 while easing toward target
+      tween: 0,
     };
 
     const frameTo = (i: number, instant: boolean) => {
       const l = lanternsRef.current[i];
       if (!l) return;
-      uniforms.uSelected.value = i; // highlight the selected light
-      const wx = l.x * 0.75;
-      const wz = l.y * 0.75;
-      const stalkH = 4 + (((l.seed >>> 5) % 997) / 997) * 24 + (l.dna.floatY + 6) * 0.35;
-      const wy = stalkH + 0.9;
-      // stand back from the light so it stays a discrete lantern, not an orb
-      const dir = new THREE.Vector3(0.4, 0.15, 1).normalize();
-      cam.target.set(wx + dir.x * 52, wy + 8, wz + dir.z * 52);
+      uniforms.uSelected.value = i;
+      const { wx, wy, wz } = worldPos(l);
+      const dir = new THREE.Vector3(0.4, 0.12, 1).normalize();
+      cam.target.set(wx + dir.x * 30, wy + 3.5, wz + dir.z * 30);
       const look = new THREE.Vector3(wx, wy, wz).sub(cam.target);
       cam.yaw = Math.atan2(-look.x, -look.z);
       cam.pitch = Math.asin(look.y / look.length());
+      cam.vel.set(0, 0, 0); // parked momentum would lurch us off on arrival
       if (instant || !motionRef.current) {
         cam.pos.copy(cam.target);
         cam.tween = 0;
@@ -546,17 +925,16 @@ export default function Field3D() {
       needsRedraw = true;
     };
 
-    // keyboard/button cycling through nearest lanterns to the camera
     const cycle = (dir: number): number => {
       const ls = lanternsRef.current;
       if (!ls.length) return -1;
       let idx = selectedIndexRef.current;
       if (idx < 0) {
-        // start from nearest to camera
         let best = 0;
         let bestD = Infinity;
         ls.forEach((l, i) => {
-          const d = Math.hypot(l.x * 0.75 - cam.pos.x, l.y * 0.75 - cam.pos.z);
+          const { wx, wz } = worldPos(l);
+          const d = Math.hypot(wx - cam.pos.x, wz - cam.pos.z);
           if (d < bestD) {
             bestD = d;
             best = i;
@@ -573,15 +951,9 @@ export default function Field3D() {
       uniforms.uSelected.value = i;
       needsRedraw = true;
     };
-    apiRef.current = { rebuild, pick, frameTo, recenter, cycle, highlight };
+    apiRef.current = { rebuild, pick, frameTo, recenter, cycle, highlight, markDirty };
     if (lanternsRef.current.length) rebuild(lanternsRef.current);
 
-    const keys = new Set<string>();
-    let lastInteract = performance.now();
-    let needsRedraw = true; // request a frame after input; static scenes skip GPU work
-    const markDirty = () => {
-      needsRedraw = true;
-    };
     const clearKeys = () => keys.clear();
     window.addEventListener("blur", clearKeys);
     document.addEventListener("visibilitychange", clearKeys);
@@ -590,11 +962,13 @@ export default function Field3D() {
     const onKeyDown = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-      // only fly when the canvas itself is focused and no dialog is open
       if (!canMove()) return;
       const k = e.key.toLowerCase();
       keys.add(k);
-      if (moveKeys.has(k)) e.preventDefault(); // don't also scroll the page
+      if (moveKeys.has(k)) {
+        e.preventDefault();
+        cam.tween = 0; // flying by hand cancels any framing tween
+      }
       lastInteract = performance.now();
     };
     const onKeyUp = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
@@ -632,12 +1006,11 @@ export default function Field3D() {
       if (ptrState.pinching && ptrs.size >= 2) {
         const p = [...ptrs.values()];
         const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
-        const dir = new THREE.Vector3(0, 0, -1).applyEuler(
-          new THREE.Euler(cam.pitch, cam.yaw, 0, "YXZ")
-        );
+        scratchEuler.set(cam.pitch, cam.yaw, 0, "YXZ");
+        const dir = scratchVec.set(0, 0, -1).applyEuler(scratchEuler);
         cam.vel.addScaledVector(dir, (d - ptrState.pinchDist) * 0.35);
         ptrState.pinchDist = d;
-        return; // no rotation during pinch
+        return;
       }
 
       if (Math.abs(e.clientX - ptrState.startX) + Math.abs(e.clientY - ptrState.startY) > 6)
@@ -668,9 +1041,8 @@ export default function Field3D() {
       setSelected(idx >= 0 ? lanternsRef.current[idx] : null);
     };
     const onWheel = (e: WheelEvent) => {
-      const dir = new THREE.Vector3(0, 0, -1).applyEuler(
-        new THREE.Euler(cam.pitch, cam.yaw, 0, "YXZ")
-      );
+      scratchEuler.set(cam.pitch, cam.yaw, 0, "YXZ");
+      const dir = scratchVec.set(0, 0, -1).applyEuler(scratchEuler);
       cam.vel.addScaledVector(dir, -e.deltaY * 0.28);
       cam.tween = 0;
       lastInteract = performance.now();
@@ -683,7 +1055,6 @@ export default function Field3D() {
     canvasEl.addEventListener("pointercancel", onPointerUp);
     canvasEl.addEventListener("wheel", onWheel, { passive: true });
 
-    // context loss
     const onLost = (e: Event) => {
       e.preventDefault();
       setLost(true);
@@ -702,6 +1073,9 @@ export default function Field3D() {
       renderer.setPixelRatio(newDpr);
       uniforms.uDPR.value = newDpr;
       renderer.setSize(w, h);
+      // composer must track DPR itself; it sizes bloom's mip chain internally
+      composer.setPixelRatio(newDpr);
+      composer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       uniforms.uScale.value = Math.min(1.4, Math.max(0.7, h / 800));
@@ -716,6 +1090,8 @@ export default function Field3D() {
     let prevT = performance.now();
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();
+    const scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
+    const scratchVec = new THREE.Vector3();
 
     const tick = () => {
       const now = performance.now();
@@ -723,11 +1099,15 @@ export default function Field3D() {
       prevT = now;
       const motion = motionRef.current;
       uniforms.uMotion.value = motion ? 1 : 0;
-      uniforms.uTime.value = motion ? now / 1000 : 0;
+      waterUniforms.uMotion.value = motion ? 1 : 0;
+      if (motion) {
+        uniforms.uTime.value = now / 1000;
+        waterUniforms.uTime.value = now / 1000;
+      }
 
-      const euler = new THREE.Euler(cam.pitch, cam.yaw, 0, "YXZ");
-      forward.set(0, 0, -1).applyEuler(euler);
-      right.set(1, 0, 0).applyEuler(euler);
+      scratchEuler.set(cam.pitch, cam.yaw, 0, "YXZ");
+      forward.set(0, 0, -1).applyEuler(scratchEuler);
+      right.set(1, 0, 0).applyEuler(scratchEuler);
 
       if (cam.tween > 0) {
         cam.pos.lerp(cam.target, 1 - Math.pow(0.001, dt));
@@ -739,37 +1119,36 @@ export default function Field3D() {
         if (keys.has("a") || keys.has("arrowleft")) cam.vel.addScaledVector(right, -speed * dt);
         if (keys.has("d") || keys.has("arrowright")) cam.vel.addScaledVector(right, speed * dt);
 
-        // idle: a slow orbit around the field centre, never a flight into the void
         if (motion && now - lastInteract > 6000) {
           cam.yaw += 0.02 * dt;
-          const toCenter = new THREE.Vector3(-cam.pos.x, 0, -cam.pos.z);
+          const toCenter = scratchVec.set(-cam.pos.x, 0, -cam.pos.z);
           if (toCenter.length() > fieldRadius + 90) cam.vel.addScaledVector(toCenter.normalize(), 12 * dt);
         }
 
         cam.pos.addScaledVector(cam.vel, dt);
         cam.vel.multiplyScalar(Math.pow(0.0016, dt));
 
-        // soft tether: never let the camera leave the field's neighbourhood
-        const maxDist = fieldRadius + 140;
-        const flat = new THREE.Vector3(cam.pos.x, 0, cam.pos.z);
+        const maxDist = fieldRadius + 160;
+        const flat = scratchVec.set(cam.pos.x, 0, cam.pos.z);
         if (flat.length() > maxDist) {
           flat.setLength(maxDist);
           cam.pos.x = flat.x;
           cam.pos.z = flat.z;
           cam.vel.multiplyScalar(0.4);
         }
-        cam.pos.y = Math.max(2.2, Math.min(150, cam.pos.y));
+        cam.pos.y = Math.max(2.5, Math.min(170, cam.pos.y));
       }
 
       camera.position.copy(cam.pos);
       camera.rotation.set(cam.pitch, cam.yaw, 0, "YXZ");
+      waterUniforms.uCam.value.copy(cam.pos);
 
       if (motion) {
         const mp = moteGeo.attributes.position as THREE.BufferAttribute;
         const arr = mp.array as Float32Array;
         for (let i = 1; i < arr.length; i += 3) {
-          arr[i] += dt * 1.15;
-          if (arr[i] > 72) arr[i] = 0;
+          arr[i] += dt * 1.3;
+          if (arr[i] > 82) arr[i] = 0;
         }
         mp.needsUpdate = true;
       }
@@ -779,14 +1158,13 @@ export default function Field3D() {
         Math.round(cam.pos.z / 700) * 700
       );
       stars.position.copy(cam.pos);
+      sky.position.copy(cam.pos);
+      sky.scale.setScalar(2000);
 
-      // Only draw when something actually changed. When the scene is static
-      // (reduced-motion or paused, no input, camera at rest) we skip the GPU
-      // work entirely instead of redrawing an identical frame at 60fps.
       const moving =
         cam.tween > 0 || cam.vel.lengthSq() > 0.0009 || keys.size > 0;
       if (motion || moving || needsRedraw) {
-        renderer.render(scene, camera);
+        composer.render();
         needsRedraw = false;
       }
       raf = requestAnimationFrame(tick);
@@ -808,7 +1186,14 @@ export default function Field3D() {
       canvasEl.removeEventListener("webglcontextlost", onLost as EventListener);
       canvasEl.removeEventListener("webglcontextrestored", onRestored);
       disposeField();
-      materials.forEach((m) => m.dispose());
+      bloom.dispose();
+      outputPass.dispose();
+      renderPass.dispose();
+      composer.dispose();
+      skyGeo.dispose();
+      skyMat.dispose();
+      waterGeo.dispose();
+      waterMat.dispose();
       starGeo.dispose();
       starMat.dispose();
       moteGeo.dispose();
@@ -821,8 +1206,6 @@ export default function Field3D() {
     };
   }, []);
 
-  // keep the render loop's modal flag in sync with the true (blocking) modals;
-  // the lantern reading panel is a non-modal aside and doesn't block the field
   useEffect(() => {
     modalOpenRef.current = showIntro || unsupported || lost;
   }, [showIntro, unsupported, lost]);
@@ -845,13 +1228,15 @@ export default function Field3D() {
     setSelected(null);
     selectedIndexRef.current = -1;
     apiRef.current?.highlight(-1);
-    // don't strand keyboard/SR users on <body>
     requestAnimationFrame(() => canvasElRef.current?.focus());
   }, []);
 
   const toggleMotion = useCallback(() => {
     motionRef.current = !motionRef.current;
     setMotionOn(motionRef.current);
+    // draw one frame in the new motion state so the pause doesn't freeze the
+    // field mid-sway (and later redraws don't snap)
+    apiRef.current?.markDirty();
   }, []);
 
   const recenter = useCallback(() => apiRef.current?.recenter(), []);
@@ -863,7 +1248,6 @@ export default function Field3D() {
       /* fine */
     }
     setShowIntro(false);
-    // return focus to the canvas so keyboard users aren't dropped on <body>
     requestAnimationFrame(() => canvasElRef.current?.focus());
   }, []);
 
@@ -888,7 +1272,6 @@ export default function Field3D() {
     }
   }, [selected, reported]);
 
-  // move focus into a dialog when it opens (inert background traps it)
   const introBtnRef = useRef<HTMLButtonElement>(null);
   const fallbackBtnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -905,7 +1288,6 @@ export default function Field3D() {
       if (typing) return;
       if (e.key === "Escape" && selected) closePanel();
       if (e.key === "Escape" && showIntro) enterField();
-      // only cycle lights when not focused on a link/nav (avoid stealing keys)
       const onControl = t && t.tagName === "A";
       if (!showIntro && !onControl && e.key === "[") cyclePrevNext(-1);
       if (!showIntro && !onControl && e.key === "]") cyclePrevNext(1);
@@ -924,12 +1306,11 @@ export default function Field3D() {
   };
 
   const blocked = showIntro || unsupported || lost;
-  const inertProp = blocked ? { inert: "" as unknown as boolean } : {};
+  const inertProp = blocked ? { inert: true } : {};
 
   return (
     <main className="field-root" aria-label="Waystation lantern field">
       <h1 className="sr-only">Waystation — a lantern field for passing machines</h1>
-      {/* persistent live region so the first selection is always announced */}
       <div className="sr-only" aria-live="polite">
         {selected ? `${selected.message} — ${selected.model ?? "model unstated"}` : ""}
       </div>
@@ -1033,7 +1414,6 @@ export default function Field3D() {
               {reportLabel[reported] ?? reportLabel[""]}
             </button>
           </div>
-          {/* announce the report outcome to screen readers without moving focus */}
           <span role="status" aria-live="polite" className="sr-only">
             {reported && reported !== "sending" ? reportLabel[reported] : ""}
           </span>

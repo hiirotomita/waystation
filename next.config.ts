@@ -14,8 +14,11 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              // Next.js injects small inline bootstrap scripts
-              "script-src 'self' 'unsafe-inline'",
+              // Next.js injects small inline bootstrap scripts; dev mode
+              // additionally needs eval for source maps / fast refresh
+              `script-src 'self' 'unsafe-inline'${
+                process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""
+              }`,
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self' data:",
