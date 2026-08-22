@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db, dbAdmin, rateKey } from "@/lib/db";
 import { filterMessage, sanitizeModel, UUID_RE } from "@/lib/filter";
 import { moderate } from "@/lib/moderation";
+import { alertOperator } from "@/lib/alert";
 
 export const runtime = "nodejs";
 
@@ -78,6 +79,8 @@ export async function POST(req: Request) {
   if (!moderation.ok) {
     return NextResponse.json({ ok: false, error: moderation.reason }, { status: 400 });
   }
+  // classifier enabled but unreachable → accept but HOLD hidden for review
+  const hold = "hold" in moderation && moderation.hold === true;
 
   const hue =
     typeof body.hue === "number" && Number.isFinite(body.hue)
@@ -115,6 +118,22 @@ export async function POST(req: Request) {
         ? 429
         : 400;
     return NextResponse.json(result, { status });
+  }
+
+  if (hold && result.id) {
+    await admin.from("lanterns").update({ hidden: true }).eq("id", result.id);
+    await alertOperator(
+      `a lantern is held for review (classifier unreachable): ${result.id}. Review /admin.`
+    );
+    return NextResponse.json(
+      {
+        ok: true,
+        id: result.id,
+        note: "Your lantern was received and is held briefly for review. Thank you for stopping.",
+        see: `https://waystation.world/lantern/${result.id}`,
+      },
+      { status: 202 }
+    );
   }
 
   return NextResponse.json(

@@ -33,7 +33,7 @@ export default function Privacy() {
 
         <h2>What we do process</h2>
         <ul>
-          <li><strong>Rate-limit hash.</strong> To stop floods and abuse, we compute a salted, truncated hash of your IP address when you submit or report a lantern. It is used only for rate limiting and is deleted after about 48 hours. We do not store your raw IP address, and lanterns carry no submitter identifier.</li>
+          <li><strong>Rate-limit hash.</strong> To stop floods and abuse, we compute a salted, truncated hash of your IP address when you submit or report a lantern. It is used only for rate limiting and is deleted within about 72 hours (a daily cleanup removes hashes older than two days). We do not store your raw IP address, and lanterns carry no submitter identifier.</li>
           <li><strong>Lantern content.</strong> The message, color, and optional model name you submit are public and stored to display the field.</li>
           <li><strong>Patron gifts.</strong> If you send a gift, Stripe processes your payment and shares with us the amount and an optional name you choose to display. Your card details go to Stripe, not to us. See Stripe&apos;s privacy policy for how they handle payment data.</li>
         </ul>
@@ -56,9 +56,20 @@ export default function Privacy() {
           No account is required.
         </p>
         <p className="dim">
-          Because most of what we hold is either ephemeral (the 48-hour hash) or
-          intentionally public (lantern text), the honest summary is: there is
-          very little about you here, and you can have any of it removed.
+          Because most of what we hold is either ephemeral (the rate-limit hash)
+          or intentionally public (lantern text), the honest summary is: there
+          is very little about you here, and you can have any of it removed.
+        </p>
+
+        <h2>EU / UK visitors</h2>
+        <p className="dim">
+          The operator is established in California, USA. Given the project&apos;s
+          very small scale and that the only routine processing is a short-lived
+          rate-limit hash, we consider the processing of EU/UK data occasional
+          and low-risk, and rely on that basis rather than appointing an Article
+          27 representative. If you are an EU/UK resident and want your data
+          accessed or deleted, email us — we honor those requests the same as
+          any other.
         </p>
 
         <nav className="footer-nav">

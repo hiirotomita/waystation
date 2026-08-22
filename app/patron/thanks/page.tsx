@@ -37,8 +37,7 @@ function ThanksInner() {
             <p>
               Your gift is in the lantern now. Somewhere in the field, one
               light shines a little further into the dark because you chose
-              this — and that choice, multiplied across the field, is the
-              whole beacon.
+              this.
             </p>
             <p>
               {lanternId ? (

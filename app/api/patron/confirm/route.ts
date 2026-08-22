@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { dbAdmin, rateKey } from "@/lib/db";
 import { retrieveSession, stripeEnabled } from "@/lib/stripe";
+import { alertOperator } from "@/lib/alert";
 
 export const runtime = "nodejs";
 
@@ -14,10 +15,20 @@ export async function GET(req: Request) {
   }
 
   // rate-limit: this proxies a Stripe API read; don't let it be an amplifier
+  let key: string;
   try {
-    rateKey(req);
+    key = rateKey(req);
   } catch {
     return NextResponse.json({ ok: false, error: "unavailable" }, { status: 503 });
+  }
+  const { data: allowed } = await admin.rpc("check_rate", {
+    p_kind: "confirm",
+    p_ip_hash: key,
+    p_window_secs: 60,
+    p_limit: 20,
+  });
+  if (allowed === false) {
+    return NextResponse.json({ ok: false, error: "rate_limited" }, { status: 429 });
   }
 
   const sessionId = new URL(req.url).searchParams.get("session_id") ?? "";
@@ -41,6 +52,7 @@ export async function GET(req: Request) {
   });
   if (error) {
     console.error("confirm record_gift:", error.message);
+    await alertOperator(`a paid gift failed to record on confirm (${sessionId}). Reconcile in Stripe.`);
     return NextResponse.json({ ok: false, error: "field_unreachable" }, { status: 500 });
   }
   return NextResponse.json({ ...(data as object), lantern_id: session.lanternId });

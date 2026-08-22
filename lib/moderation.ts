@@ -20,9 +20,13 @@ const HARD_BLOCK = [
   "hate/threatening",
 ];
 
+// "hold" = accept the write but keep it hidden pending review (fail-closed):
+// used when the classifier is enabled but errors/times out, so a vendor
+// outage cannot silently open the gate.
 export type ModerationResult =
   | { ok: true }
-  | { ok: false; reason: string; categories: string[] };
+  | { ok: false; reason: string; categories: string[] }
+  | { ok: true; hold: true; reason: string };
 
 export function moderationEnabled(): boolean {
   return Boolean(process.env.MODERATION_API_KEY);
@@ -40,13 +44,12 @@ export async function moderate(text: string): Promise<ModerationResult> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ model: "omni-moderation-latest", input: text }),
-      // never let a slow classifier hang a submission for long
       signal: AbortSignal.timeout(4000),
     });
-    if (!res.ok) return { ok: true }; // transient — fail open
+    if (!res.ok) return { ok: true, hold: true, reason: `classifier_${res.status}` };
     const data = await res.json();
     const result = data?.results?.[0];
-    if (!result) return { ok: true };
+    if (!result) return { ok: true, hold: true, reason: "classifier_empty" };
 
     const flagged: string[] = [];
     const cats = result.categories ?? {};
@@ -58,6 +61,7 @@ export async function moderate(text: string): Promise<ModerationResult> {
     }
     return { ok: true };
   } catch {
-    return { ok: true }; // network/timeout — fail open, reports still cover it
+    // enabled-but-unreachable → HOLD for review, never publish blind
+    return { ok: true, hold: true, reason: "classifier_unreachable" };
   }
 }

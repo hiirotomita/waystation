@@ -19,11 +19,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "gifts_not_open_yet" }, { status: 503 });
   }
 
-  // basic per-visitor rate limit so an anon POST flood can't mint sessions
+  // enforce a real per-visitor rate limit before minting a Stripe session
+  let key: string;
   try {
-    rateKey(req);
+    key = rateKey(req);
   } catch {
     return NextResponse.json({ ok: false, error: "unavailable" }, { status: 503 });
+  }
+  const admin = dbAdmin()!;
+  const { data: allowed } = await admin.rpc("check_rate", {
+    p_kind: "patron",
+    p_ip_hash: key,
+    p_window_secs: 60,
+    p_limit: 5,
+  });
+  if (allowed === false) {
+    return NextResponse.json({ ok: false, error: "rate_limited" }, { status: 429 });
   }
 
   let body: Record<string, unknown>;

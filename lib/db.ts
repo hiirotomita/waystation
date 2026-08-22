@@ -40,25 +40,41 @@ export function dbAdmin(): SupabaseClient | null {
 // connecting-IP header — never from a client-supplied value, and never the
 // leftmost X-Forwarded-For token (which the client controls). IPv6 clients
 // are bucketed to their /64 so a single /64 cannot mint unlimited identities.
-export function rateKey(req: Request): string {
+function connectingIp(req: Request): string {
   const realIp = req.headers.get("x-real-ip")?.trim();
   const fwd = req.headers.get("x-forwarded-for") ?? "";
   // rightmost XFF token is the hop closest to our edge = most trustworthy
   const fwdTokens = fwd.split(",").map((s) => s.trim()).filter(Boolean);
   const rightmost = fwdTokens.length ? fwdTokens[fwdTokens.length - 1] : "";
-  let ip = realIp || rightmost || "unknown";
+  return realIp || rightmost || "unknown";
+}
 
-  if (ip.includes(":") && ip !== "unknown") {
-    // bucket IPv6 to /64 (first four hextets)
-    const hextets = ip.split(":");
-    ip = hextets.slice(0, 4).join(":") + "::/64";
-  }
-
+function salted(value: string): string {
   const salt = process.env.IP_SALT;
   if (!salt) {
     // Refuse to run with a predictable salt; a known salt makes the hash
     // reversible to a plaintext IP. Fail loudly instead of degrading privacy.
     throw new Error("IP_SALT is not set");
   }
-  return createHash("sha256").update(`${salt}:${ip}`).digest("hex").slice(0, 32);
+  return createHash("sha256").update(`${salt}:${value}`).digest("hex").slice(0, 32);
+}
+
+// Rate-limit identity: IPv6 bucketed to /64.
+export function rateKey(req: Request): string {
+  let ip = connectingIp(req);
+  if (ip.includes(":") && ip !== "unknown") {
+    ip = ip.split(":").slice(0, 4).join(":") + "::/64";
+  }
+  return salted(ip);
+}
+
+// Reporter identity for the distinct-reporter count. Bucketed to /48 so a
+// single routed IPv6 allocation can't mint thousands of "distinct" reporters
+// to censor a lantern.
+export function reporterKey(req: Request): string {
+  let ip = connectingIp(req);
+  if (ip.includes(":") && ip !== "unknown") {
+    ip = ip.split(":").slice(0, 3).join(":") + "::/48";
+  }
+  return salted(ip);
 }

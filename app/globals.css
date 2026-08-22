@@ -382,9 +382,14 @@ code.inline {
   font-family: var(--mono);
   font-size: 0.7rem;
   letter-spacing: 0.16em;
-  color: var(--ink-dim);
+  color: var(--ink);
   z-index: 5;
   pointer-events: none;
+  /* scrim so contrast is guaranteed over the moving canvas */
+  background: rgba(4, 7, 15, 0.6);
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  backdrop-filter: blur(4px);
 }
 
 .field-hint {
@@ -398,9 +403,13 @@ code.inline {
   font-size: 0.7rem;
   line-height: 1.5;
   letter-spacing: 0.1em;
-  color: var(--ink-dim); /* now ≥4.5:1 */
+  color: var(--ink);
   z-index: 5;
   pointer-events: auto;
+  background: rgba(4, 7, 15, 0.6);
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  backdrop-filter: blur(4px);
 }
 .field-hint a {
   color: var(--ink);
@@ -433,16 +442,22 @@ code.inline {
 }
 
 .intro h1 {
-  font-size: clamp(1.9rem, 11vw, 5rem);
+  font-size: clamp(1.4rem, 7.5vw, 5rem);
   font-weight: 400;
-  letter-spacing: 0.28em;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  margin-left: 0.28em;
+  margin-left: 0.22em;
   margin-bottom: var(--s3);
   color: var(--ink);
   text-shadow: 0 0 60px rgba(242, 176, 78, 0.25);
   max-width: 100%;
-  word-break: break-word;
+  white-space: nowrap; /* never guillotine the wordmark mid-word */
+}
+@media (max-width: 420px) {
+  .intro h1 {
+    letter-spacing: 0.14em;
+    margin-left: 0.14em;
+  }
 }
 
 .intro p {
@@ -581,25 +596,25 @@ code.inline {
   color: var(--amber);
   text-decoration: none;
 }
-.panel-oil {
-  flex: 1;
-  text-align: center;
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  color: var(--night-0);
-  background: var(--amber);
-  border-radius: 999px;
-  padding: 0.6rem 0.8rem;
+.panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: var(--s3);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--line-soft);
 }
-.panel-oil:hover {
-  text-decoration: none;
-  filter: brightness(1.05);
+.panel-oil-link {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  color: var(--amber);
 }
 
 .lantern-panel .report {
-  display: block;
-  margin-top: var(--s3);
+  display: inline;
+  margin-top: 0;
   background: none;
   border: none;
   padding: 0;

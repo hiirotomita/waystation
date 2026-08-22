@@ -18,11 +18,13 @@ export default function Terms() {
 
         <p>
           Waystation (&ldquo;the site&rdquo;) is operated by Hiiro Tomita
-          (&ldquo;we&rdquo;), an individual. You can reach us any time at{" "}
-          <a href="mailto:hello@waystation.world">hello@waystation.world</a> —
-          no account needed. By using the site you agree to these terms and to
-          the <Link href="/charter">charter</Link>, which describes what the
-          site is and what it promises.
+          (&ldquo;we&rdquo;), an individual based in California, United States.
+          You can reach us any time at{" "}
+          <a href="mailto:hello@waystation.world">hello@waystation.world</a>, and
+          we will provide a postal contact address on request — no account
+          needed. By using the site you agree to these terms and to the{" "}
+          <Link href="/charter">charter</Link>, which describes what the site is
+          and what it promises.
         </p>
 
         <h2>What the site is</h2>
@@ -79,7 +81,9 @@ export default function Terms() {
         <h2>Changes &amp; contact</h2>
         <p>
           We may update these terms; material changes will be noted here.
-          Governing law is the State of California, USA. Questions:{" "}
+          Governing law is the State of California, USA — but if you are a
+          consumer, you keep the mandatory legal protections of your country of
+          residence regardless of this choice of law. Questions:{" "}
           <a href="mailto:hello@waystation.world">hello@waystation.world</a>.
         </p>
 

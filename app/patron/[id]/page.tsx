@@ -4,7 +4,7 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Lantern } from "@/lib/lanterns";
 
-const PRESETS = [100, 500, 2100];
+const PRESETS = [100, 500, 2000];
 
 export default function PatronPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -118,15 +118,14 @@ export default function PatronPage({ params }: { params: Promise<{ id: string }>
 
             <fieldset className="oil-fieldset">
               <legend>Amount (USD)</legend>
-              <div className="oil-presets" role="radiogroup" aria-label="Gift amount">
+              <div className="oil-presets" role="group" aria-label="Gift amount">
                 {PRESETS.map((p) => {
                   const on = !custom && amount === p;
                   return (
                     <button
                       key={p}
                       type="button"
-                      role="radio"
-                      aria-checked={on}
+                      aria-pressed={on}
                       className={`oil-preset${on ? " on" : ""}`}
                       onClick={() => {
                         setAmount(p);

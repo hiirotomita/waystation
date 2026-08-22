@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { dbAdmin, rateKey } from "@/lib/db";
+import { dbAdmin, reporterKey } from "@/lib/db";
 import { UUID_RE } from "@/lib/filter";
 import { alertOperator } from "@/lib/alert";
 
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
 
   let key: string;
   try {
-    key = rateKey(req);
+    key = reporterKey(req);
   } catch {
     return NextResponse.json({ ok: false, error: "field_unreachable" }, { status: 503 });
   }
@@ -42,16 +42,31 @@ export async function POST(req: Request) {
     console.error("POST /api/report rpc:", error.message);
     return NextResponse.json({ ok: false, error: "field_unreachable" }, { status: 500 });
   }
-  const result = data as { ok: boolean; error?: string; reports?: number };
+  const result = data as {
+    ok: boolean;
+    error?: string;
+    reports?: number;
+    already_reported?: boolean;
+    noop?: boolean;
+  };
   // Alert the operator on the first report of a lantern and on auto-hide, so
   // vile content is discoverable at 4am instead of via a stranger's tweet.
   if (result.ok && typeof result.reports === "number") {
     if (result.reports === 1) {
-      alertOperator(`a lantern was reported (${body.id})${reason ? ` — "${reason}"` : ""}. Review /admin.`);
-    } else if (result.reports >= 3) {
-      alertOperator(`a lantern was auto-hidden after 3 reports (${body.id}). Review /admin.`);
+      await alertOperator(`a lantern was reported (${body.id})${reason ? ` — "${reason}"` : ""}. Review /admin.`);
+    } else if (result.reports >= 4) {
+      await alertOperator(`a lantern was auto-hidden after ${result.reports} reports (${body.id}). Review /admin.`);
     }
   }
-  const status = !result.ok && result.error === "rate_limited" ? 429 : 200;
-  return NextResponse.json(data, { status });
+  // Never echo the exact distinct-report count to anonymous callers (it would
+  // let an attacker measure how close a lantern is to the hide threshold).
+  if (!result.ok) {
+    const status = result.error === "rate_limited" ? 429 : 200;
+    return NextResponse.json(result, { status });
+  }
+  return NextResponse.json({
+    ok: true,
+    ...(result.already_reported ? { already_reported: true } : {}),
+    ...(result.noop ? { noop: true } : {}),
+  });
 }

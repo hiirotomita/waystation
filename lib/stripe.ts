@@ -1,6 +1,7 @@
 // Minimal Stripe REST client. Patron lights are optional: if the env keys
 // are absent, every gift endpoint reports the oil store as closed.
 import { createHmac, timingSafeEqual } from "crypto";
+import { alertOperator } from "./alert";
 
 const API = "https://api.stripe.com/v1";
 
@@ -44,8 +45,12 @@ export async function createCheckoutSession(opts: {
   const data = await res.json();
   if (!res.ok || !data.url) {
     // automatic_tax requires an origin address configured in the Stripe
-    // dashboard; if it isn't, retry once without tax so a launch isn't blocked.
-    if (data?.error?.param?.includes("automatic_tax")) {
+    // dashboard; if it isn't, retry once without tax so a launch isn't blocked
+    // — but alert the operator loudly so tax-free selling is never SILENT.
+    if (data?.error?.param?.includes("automatic_tax") || data?.error?.message?.toLowerCase?.().includes("tax")) {
+      await alertOperator(
+        "Stripe Tax is not configured — a gift was created WITHOUT tax collection. Configure an origin address + Stripe Tax in the Stripe dashboard before taking international gifts."
+      );
       body.delete("automatic_tax[enabled]");
       const retry = await fetch(`${API}/checkout/sessions`, {
         method: "POST",
@@ -93,6 +98,9 @@ export function verifyWebhook(
   const t = parts["t"];
   const v1 = parts["v1"];
   if (!t || !v1) return false;
+  // reject stale timestamps (>5 min) to prevent replay
+  const ts = parseInt(t, 10);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) return false;
   const expected = createHmac("sha256", secret)
     .update(`${t}.${payload}`)
     .digest("hex");

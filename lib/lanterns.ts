@@ -44,18 +44,20 @@ export function hashString(s: string): number {
 
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ≈ 2.39996
 
-// index → field coordinates (world units). The spiral index is the lantern's
-// STABLE per-row `seq` (assigned at insert), never its position in the fetched
-// window — so a light never moves once lit, no matter what else is loaded, and
-// the oldest are always at the centre. Deleted lanterns simply leave a gap.
+// index → field coordinates (world units). The spiral index is a DENSE rank of
+// the loaded lanterns ordered by seq (creation order): the oldest loaded light
+// sits at the centre and the field grows outward, with no gaps from deletions
+// and — crucially — no empty core when only a window of a large field is
+// loaded. A lantern's position is stable as the field grows (new lights append
+// at the rim); it shifts only when an earlier light is removed.
 export function place(lanterns: Lantern[]): PlacedLantern[] {
-  const hasSeq = lanterns.every((l) => typeof l.seq === "number" && l.seq! > 0);
-  const ranked = hasSeq
-    ? lanterns.map((l) => ({ l, i: l.seq! - 1 }))
-    : // fallback: chronological rank if seq is somehow absent
-      [...lanterns]
-        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-        .map((l, i) => ({ l, i }));
+  const ranked = [...lanterns]
+    .sort((a, b) => {
+      const sa = typeof a.seq === "number" ? a.seq : new Date(a.created_at).getTime();
+      const sb = typeof b.seq === "number" ? b.seq : new Date(b.created_at).getTime();
+      return sa - sb;
+    })
+    .map((l, i) => ({ l, i }));
 
   return ranked.map(({ l, i }) => {
     const jitter = prng(hashString(l.id));

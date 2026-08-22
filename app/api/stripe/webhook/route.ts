@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { dbAdmin } from "@/lib/db";
 import { verifyWebhook } from "@/lib/stripe";
+import { alertOperator } from "@/lib/alert";
 
 export const runtime = "nodejs";
 
@@ -47,9 +48,19 @@ export async function POST(req: Request) {
       });
       if (error) {
         console.error("webhook record_gift:", error.message);
+        await alertOperator(`a paid gift failed to record (session ${s.id}). Reconcile in Stripe.`);
         return NextResponse.json({ error: "record_failed" }, { status: 500 });
       }
     }
+  } else if (event.type === "charge.refunded" || event.type === "charge.dispute.created") {
+    // reflect reversals: dim the lantern and drop the patron name
+    const ch = event.data?.object ?? {};
+    const meta = (ch.metadata ?? {}) as Record<string, string>;
+    // charge metadata may be absent; alert the operator to reconcile by hand
+    await alertOperator(
+      `a gift was refunded or disputed (${event.type}). Review /admin and adjust the lantern's brightness if needed.` +
+        (meta.lantern_id ? ` lantern ${meta.lantern_id}` : "")
+    );
   }
 
   return NextResponse.json({ received: true }, { status: 200 });

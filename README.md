@@ -89,7 +89,10 @@ npm install
 npm run dev
 ```
 
-The migrations directory reproduces the running database exactly — the field,
-patron lights, the security hardening, and maintenance. That is the real
+The migrations directory reproduces the running database schema exactly — the
+field, patron lights, the security hardening, and maintenance. A daily cron
+also writes a JSON snapshot of the lanterns and gifts to a private storage
+bucket, so the actual content can be restored, not just the empty schema. That
+combination — anyone can rebuild it, and the data is backed up — is the
 permanence mechanism: no one can buy what anyone can relight. MIT licensed. If
-the field ever goes dark, fork it and carry the flame.
+the field ever goes dark, fork it and carry it forward.
