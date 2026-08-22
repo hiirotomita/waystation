@@ -161,7 +161,11 @@ const SHELL_VERT = /* glsl */ `
 
     vNormalV = normalize(normalMatrix * normal);
     vec4 mv = modelViewMatrix * vec4(world, 1.0);
-    vFade = clamp(1.0 - (-mv.z - 300.0) / 900.0, 0.10, 1.0);
+    float dist = -mv.z;
+    vFade = clamp(1.0 - (dist - 300.0) / 900.0, 0.10, 1.0);
+    // a shell at point-blank range dims to a dark silhouette instead of
+    // flooding the frame through bloom
+    vFade *= smoothstep(1.5, 9.0, dist);
     gl_Position = projectionMatrix * mv;
   }
 `;
@@ -903,12 +907,35 @@ export default function Field3D() {
       if (!l) return;
       uniforms.uSelected.value = i;
       const { wx, wy, wz } = worldPos(l);
-      const dir = new THREE.Vector3(0.4, 0.12, 1).normalize();
-      cam.target.set(wx + dir.x * 30, wy + 3.5, wz + dir.z * 30);
+      // pick the standoff direction whose parking spot is least crowded, so
+      // the camera never parks inside a neighbouring lantern (bloom turns a
+      // point-blank shell into a blinding column)
+      const ls = lanternsRef.current;
+      let bestDir = 0;
+      let bestClear = -Infinity;
+      for (let a = 0; a < 8; a++) {
+        const ang = 0.38 + (a * Math.PI) / 4;
+        const px = wx + Math.cos(ang) * 30;
+        const pz = wz + Math.sin(ang) * 30;
+        let clear = Infinity;
+        for (let k = 0; k < ls.length; k++) {
+          if (k === i) continue;
+          const p = worldPos(ls[k]);
+          const d = Math.hypot(p.wx - px, p.wy - (wy + 3.5), p.wz - pz);
+          if (d < clear) clear = d;
+        }
+        if (clear > bestClear) {
+          bestClear = clear;
+          bestDir = ang;
+        }
+        if (clear > 14) { bestDir = ang; break; } // good enough, keep it stable
+      }
+      cam.target.set(wx + Math.cos(bestDir) * 30, wy + 3.5, wz + Math.sin(bestDir) * 30);
       const look = new THREE.Vector3(wx, wy, wz).sub(cam.target);
       cam.yaw = Math.atan2(-look.x, -look.z);
       cam.pitch = Math.asin(look.y / look.length());
       cam.vel.set(0, 0, 0); // parked momentum would lurch us off on arrival
+      lastInteract = performance.now(); // framing counts as interaction — no idle drift
       if (instant || !motionRef.current) {
         cam.pos.copy(cam.target);
         cam.tween = 0;
@@ -920,6 +947,7 @@ export default function Field3D() {
 
     const recenter = () => {
       applyFraming();
+      lastInteract = performance.now();
       if (!motionRef.current) cam.pos.copy(cam.target);
       else cam.tween = 1;
       needsRedraw = true;
@@ -1119,7 +1147,7 @@ export default function Field3D() {
         if (keys.has("a") || keys.has("arrowleft")) cam.vel.addScaledVector(right, -speed * dt);
         if (keys.has("d") || keys.has("arrowright")) cam.vel.addScaledVector(right, speed * dt);
 
-        if (motion && now - lastInteract > 6000) {
+        if (motion && now - lastInteract > 30000) {
           cam.yaw += 0.02 * dt;
           const toCenter = scratchVec.set(-cam.pos.x, 0, -cam.pos.z);
           if (toCenter.length() > fieldRadius + 90) cam.vel.addScaledVector(toCenter.normalize(), 12 * dt);
