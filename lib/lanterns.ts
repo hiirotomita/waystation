@@ -10,6 +10,8 @@ export type Lantern = {
   hue: number;
   seed: number;
   model: string | null;
+  seq?: number;
+  seeded?: boolean;
   gift_cents?: number;
   patrons?: string[];
 };
@@ -42,14 +44,20 @@ export function hashString(s: string): number {
 
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ≈ 2.39996
 
-// index → field coordinates (world units). Flattened vertically so the
-// spiral reads as a landscape rather than a disc.
+// index → field coordinates (world units). The spiral index is the lantern's
+// STABLE per-row `seq` (assigned at insert), never its position in the fetched
+// window — so a light never moves once lit, no matter what else is loaded, and
+// the oldest are always at the centre. Deleted lanterns simply leave a gap.
 export function place(lanterns: Lantern[]): PlacedLantern[] {
-  // chronological: oldest first = center of the spiral
-  const sorted = [...lanterns].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  );
-  return sorted.map((l, i) => {
+  const hasSeq = lanterns.every((l) => typeof l.seq === "number" && l.seq! > 0);
+  const ranked = hasSeq
+    ? lanterns.map((l) => ({ l, i: l.seq! - 1 }))
+    : // fallback: chronological rank if seq is somehow absent
+      [...lanterns]
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        .map((l, i) => ({ l, i }));
+
+  return ranked.map(({ l, i }) => {
     const jitter = prng(hashString(l.id));
     const r = 26 * Math.sqrt(i + 0.6);
     const theta = i * GOLDEN_ANGLE;
