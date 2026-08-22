@@ -7,6 +7,8 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { FXAAPass } from "three/examples/jsm/postprocessing/FXAAPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { Lantern, LanternDNA, lanternDNA, place, prng } from "@/lib/lanterns";
 
 type FieldLantern = Lantern & { dna: LanternDNA; x: number; y: number };
@@ -20,6 +22,27 @@ function worldPos(l: FieldLantern): { wx: number; wy: number; wz: number } {
   const wy = 6.5 + (((l.seed >>> 5) % 997) / 997) * 19 + (l.dna.floatY + 6) * 1.7;
   return { wx, wy, wz };
 }
+
+/* ---------------- shared GLSL: value noise + the one wind field ------------- */
+
+// One wind blows over the whole marsh: reeds, lantern sway, and mist all
+// sample the same field, so the scene gusts together instead of jittering
+// independently.
+const GLSL_WIND = /* glsl */ `
+  float windAt(vec2 p, float t) {
+    return sin(t * 0.55 + p.x * 0.020 + p.y * 0.013) * 0.7
+         + sin(t * 1.15 + p.x * 0.045 - p.y * 0.022) * 0.3;
+  }
+`;
+
+const GLSL_NOISE = /* glsl */ `
+  float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x),
+               mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+`;
 
 /* ---------------- glow sprite (the flame's halo; bloom seed) ---------------- */
 
@@ -44,6 +67,7 @@ const GLOW_VERT = /* glsl */ `
   varying float vFade;
   varying float vBright;
   varying float vNear;
+  ${GLSL_WIND}
 
   void main() {
     vHue = aHue;
@@ -52,9 +76,10 @@ const GLOW_VERT = /* glsl */ `
     vFlick = 0.86 + 0.14 * sin(uTime * aPulse + aPhase) * uMotion;
     vSel = (abs(aIndex - uSelected) < 0.5) ? 1.0 : 0.0;
 
-    // ride the same bob as the shell so the flame never slides out of its paper
+    // ride the same wind + bob as the shell so the flame never slides out of
+    // its paper
     vec3 p = position;
-    p.y += sin(uTime * 0.45 + aPhase) * 0.9 * uMotion;
+    p.y += (sin(uTime * 0.45 + aPhase) * 0.55 + windAt(position.xz, uTime) * 0.5) * uMotion;
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     float dist = -mv.z;
     vFade = clamp(1.0 - (dist - 300.0) / 900.0, 0.10, 1.0);
@@ -141,7 +166,9 @@ const SHELL_VERT = /* glsl */ `
   varying float vSel;
   varying float vFade;
   varying float vT;      // 0 at base, 1 at crown
+  varying float vA;      // around the lathe, for paper grain
   varying vec3 vNormalV;
+  ${GLSL_WIND}
 
   void main() {
     vHue = iHue;
@@ -149,10 +176,12 @@ const SHELL_VERT = /* glsl */ `
     vFlick = 0.88 + 0.12 * sin(uTime * iPulse + iPhase) * uMotion;
     vSel = (abs(iIndex - uSelected) < 0.5) ? 1.0 : 0.0;
     vT = uv.y;
+    vA = uv.x;
 
-    // gentle bob + the slightest pendulum sway, per-lantern phase
-    float bob = sin(uTime * 0.45 + iPhase) * 0.9 * uMotion;
-    float swayA = sin(uTime * 0.3 + iPhase * 1.7) * 0.05 * uMotion;
+    // the shared wind carries the lantern; a private bob rides underneath
+    float gust = windAt(iOffset.xz, uTime);
+    float bob = (sin(uTime * 0.45 + iPhase) * 0.55 + gust * 0.5) * uMotion;
+    float swayA = (gust * 0.045 + sin(uTime * 0.3 + iPhase * 1.7) * 0.02) * uMotion;
     vec3 p = position * iScale;
     p = vec3(
       p.x * cos(swayA) - p.y * sin(swayA) * 0.3,
@@ -181,11 +210,13 @@ const SHELL_FRAG = /* glsl */ `
   varying float vSel;
   varying float vFade;
   varying float vT;
+  varying float vA;
   varying vec3 vNormalV;
 
   // faceted families (diamond/hex) put huge flat faces in the belly band, so
   // each shape family scales its inner flame to stay below bloom-blowout
   uniform float uBelly;
+  ${GLSL_NOISE}
 
   vec3 hsl2rgb(float h, float s, float l) {
     vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
@@ -199,8 +230,11 @@ const SHELL_FRAG = /* glsl */ `
     vec3 paper = hsl2rgb(vHue, 0.55, 0.42);
     vec3 col = mix(flame, paper, clamp(vT * 1.5 - 0.1, 0.0, 1.0));
 
-    // ribs of the frame, faintly shadowed through the paper
+    // ribs of the frame, faintly shadowed through the paper, and the grain of
+    // the paper itself — fibers backlit by the flame
     col *= 0.90 + 0.10 * sin(vT * 26.0);
+    float grain = vnoise(vec2(vA * 34.0, vT * 15.0)) * 0.6 + vnoise(vec2(vA * 90.0, vT * 42.0)) * 0.4;
+    col *= 0.93 + 0.12 * grain;
 
     // silhouette: paper thins the light at grazing angles
     float fres = pow(1.0 - abs(vNormalV.z), 1.6);
@@ -226,6 +260,7 @@ const GRASS_VERT = /* glsl */ `
   attribute float iLean;
   attribute float iHue;
   attribute float iPhase;
+  attribute float iLY; // height of this clump's lantern; <0 for wild filler
 
   uniform float uTime;
   uniform float uMotion;
@@ -233,28 +268,40 @@ const GRASS_VERT = /* glsl */ `
   varying float vT;
   varying float vHue;
   varying float vFade;
+  varying float vLit;
+  ${GLSL_WIND}
 
   void main() {
     vT = uv.y;
     vHue = iHue;
     float t = uv.y;
 
-    // blade: tapered, bending tip-ward along its lean, swaying in the night air
+    // blade: tapered, bending tip-ward along its lean, moved by the one wind
     vec2 widthDir = vec2(cos(iAngle), sin(iAngle));
     float w = position.x * (1.0 - t * 0.82);
     float bend = t * t;
     vec2 leanDir = vec2(cos(iAngle + 1.5707), sin(iAngle + 1.5707));
     vec2 drift = leanDir * (iLean * bend * iH * 0.45);
-    drift += vec2(
-      sin(uTime * 0.8 + iPhase + iPos.x * 0.05),
-      cos(uTime * 0.6 + iPhase * 1.3)
-    ) * bend * 0.7 * uMotion;
+    float gust = windAt(iPos.xz, uTime) * uMotion;
+    // gust direction is shared; a small personal flutter rides on top
+    drift += (vec2(0.83, 0.55) * gust
+            + vec2(sin(uTime * 1.7 + iPhase), cos(uTime * 1.3 + iPhase)) * 0.18 * uMotion)
+            * bend * 0.9;
 
     vec3 world = vec3(
       iPos.x + widthDir.x * w + drift.x,
       iPos.y + t * iH,
       iPos.z + widthDir.y * w + drift.y
     );
+
+    // the lantern overhead sheds real light on its own reeds
+    if (iLY > 0.0) {
+      float d = distance(world, vec3(iPos.x, iLY, iPos.z));
+      vLit = 26.0 / (6.0 + d * d);
+    } else {
+      vLit = 0.0;
+    }
+
     vec4 mv = modelViewMatrix * vec4(world, 1.0);
     vFade = clamp(1.0 - (-mv.z - 240.0) / 700.0, 0.0, 1.0);
     gl_Position = projectionMatrix * mv;
@@ -267,6 +314,7 @@ const GRASS_FRAG = /* glsl */ `
   varying float vT;
   varying float vHue;
   varying float vFade;
+  varying float vLit;
 
   vec3 hsl2rgb(float h, float s, float l) {
     vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
@@ -278,6 +326,8 @@ const GRASS_FRAG = /* glsl */ `
     vec3 base = vec3(0.004, 0.009, 0.008);
     vec3 tip = hsl2rgb(vHue, 0.35, 0.16);
     vec3 col = mix(base, tip, pow(vT, 1.5));
+    // received lantern light: warm, hue-tinted, strongest on upper blades
+    col += mix(vec3(1.0, 0.85, 0.6), hsl2rgb(vHue, 0.6, 0.6), 0.45) * vLit;
     gl_FragColor = vec4(col * vFade, 1.0);
   }
 `;
@@ -313,9 +363,11 @@ const WATER_FRAG = /* glsl */ `
     float ripple = r1 * 0.5 + r2 * 0.3 + r3 * 0.2;
 
     vec3 col = mix(deep, skyRef, grazing + ripple * 0.06);
-    // faint moon-path sheen running toward the horizon
-    float sheen = exp(-abs(vWorld.x - uCam.x * 0.2) * 0.004) * grazing;
-    col += vec3(0.012, 0.020, 0.026) * sheen * (0.7 + ripple * 0.5);
+    // the moon lays its path on the water, broken by the ripples
+    vec2 vd = normalize(vWorld.xz - uCam.xz);
+    vec2 moonAz = normalize(vec2(-0.55, -0.72));
+    float path = pow(max(dot(vd, moonAz), 0.0), 60.0) * grazing;
+    col += vec3(0.09, 0.10, 0.11) * path * (0.55 + 0.45 * ripple);
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -335,17 +387,160 @@ const SKY_VERT = /* glsl */ `
 const SKY_FRAG = /* glsl */ `
   precision highp float;
   varying vec3 vDir;
+  ${GLSL_NOISE}
 
   void main() {
-    float h = normalize(vDir).y;
+    vec3 nd = normalize(vDir);
+    float h = nd.y;
     vec3 zenith = vec3(0.0035, 0.005, 0.011);
     vec3 horizon = vec3(0.016, 0.032, 0.052);
     vec3 col = mix(horizon, zenith, pow(clamp(h, 0.0, 1.0), 0.5));
     // a breath of light where sky meets water
     col += vec3(0.010, 0.022, 0.028) * exp(-abs(h) * 14.0);
+
+    // the milky way: a tilted band of faint cloudy starlight
+    float band = exp(-pow(dot(nd, normalize(vec3(0.42, 0.30, 0.62))), 2.0) * 7.0);
+    float cloud = vnoise(nd.xz * 6.0 + nd.y * 3.0) * 0.65 + vnoise(nd.xz * 14.0) * 0.35;
+    col += vec3(0.014, 0.017, 0.026) * band * (0.35 + 0.9 * cloud) * clamp(h * 3.0, 0.0, 1.0);
+
+    // a low moon; bright enough that bloom lends it a halo
+    vec3 moonDir = normalize(vec3(-0.55, 0.34, -0.72));
+    float md = dot(nd, moonDir);
+    float disc = smoothstep(0.99988, 0.99996, md);
+    float glowm = exp((md - 1.0) * 900.0);
+    col += vec3(1.0, 0.96, 0.86) * disc * 1.15;
+    col += vec3(0.20, 0.22, 0.26) * glowm;
     gl_FragColor = vec4(col, 1.0);
   }
 `;
+
+/* ---------------- light pools: the lanterns actually light the water ------- */
+
+const POOL_VERT = /* glsl */ `
+  attribute vec2 iPX;
+  attribute float iSize;
+  attribute float iHue;
+  attribute float iBright;
+  attribute float iPhase;
+
+  varying vec2 vQ;
+  varying float vHue;
+  varying float vBright;
+  varying float vPhase;
+  varying float vFadeP;
+
+  void main() {
+    vQ = position.xy;
+    vHue = iHue;
+    vBright = iBright;
+    vPhase = iPhase;
+    vec3 world = vec3(iPX.x + position.x * iSize, 0.06, iPX.y - position.y * iSize);
+    vec4 mv = modelViewMatrix * vec4(world, 1.0);
+    vFadeP = clamp(1.0 - (-mv.z - 260.0) / 800.0, 0.0, 1.0);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const POOL_FRAG = /* glsl */ `
+  precision highp float;
+
+  varying vec2 vQ;
+  varying float vHue;
+  varying float vBright;
+  varying float vPhase;
+  varying float vFadeP;
+
+  uniform float uTime;
+  uniform float uMotion;
+
+  vec3 hsl2rgb(float h, float s, float l) {
+    vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+  }
+
+  void main() {
+    float r = length(vQ) * 2.0;
+    if (r > 1.0) discard;
+    float fall = exp(-r * r * 5.0);
+    // ripple rings spreading through the pool of light
+    float rings = 0.82 + 0.18 * sin(r * 16.0 - uTime * 1.4 * uMotion + vPhase);
+    vec3 col = mix(vec3(1.0, 0.88, 0.66), hsl2rgb(vHue, 0.55, 0.55), 0.5);
+    float a = fall * rings * 0.26 * vBright * vFadeP;
+    if (a < 0.004) discard;
+    gl_FragColor = vec4(col, a);
+  }
+`;
+
+/* ---------------- mist: low cloud walking on the water ---------------------- */
+
+const MIST_VERT = /* glsl */ `
+  attribute vec3 iC;
+  attribute float iS;
+  attribute float iSeed;
+
+  varying vec2 vU;
+  varying float vSeed;
+  varying float vFadeM;
+
+  void main() {
+    vU = position.xy + 0.5;
+    vSeed = iSeed;
+    vec4 mv = modelViewMatrix * vec4(iC, 1.0);
+    mv.xy += position.xy * vec2(iS * 2.6, iS);
+    // fade out when the camera flies into the bank
+    vFadeM = clamp((-mv.z - 40.0) / 120.0, 0.0, 1.0);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const MIST_FRAG = /* glsl */ `
+  precision highp float;
+
+  varying vec2 vU;
+  varying float vSeed;
+  varying float vFadeM;
+
+  uniform float uTime;
+
+  ${GLSL_NOISE}
+
+  void main() {
+    vec2 p = vU * vec2(3.0, 1.6) + vec2(vSeed * 19.0, vSeed * 7.0);
+    float n = vnoise(p + vec2(uTime * 0.020, 0.0)) * 0.6
+            + vnoise(p * 2.3 - vec2(uTime * 0.013, 0.0)) * 0.4;
+    float soft = smoothstep(0.5, 0.12, abs(vU.x - 0.5)) * smoothstep(0.55, 0.18, abs(vU.y - 0.5));
+    float a = soft * smoothstep(0.30, 0.78, n) * 0.13 * vFadeM;
+    if (a < 0.003) discard;
+    gl_FragColor = vec4(vec3(0.050, 0.080, 0.115), a);
+  }
+`;
+
+/* ---------------- final grade: vignette + a breath of film grain ------------ */
+
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null as THREE.Texture | null }, uTime: { value: 0 } },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float d = distance(vUv, vec2(0.5, 0.46));
+      c.rgb *= 1.0 - 0.30 * smoothstep(0.44, 0.95, d);
+      float g = fract(sin(dot(vUv * 917.0, vec2(12.9898, 78.233)) + uTime * 61.0) * 43758.5453);
+      c.rgb += (g - 0.5) * 0.016;
+      gl_FragColor = c;
+    }
+  `,
+};
 
 /* ---------------- lathe profiles: the four lantern families ---------------- */
 
@@ -510,6 +705,11 @@ export default function Field3D() {
     composer.addPass(bloom);
     const outputPass = new OutputPass();
     composer.addPass(outputPass);
+    // AA after tonemap (the composer path bypasses MSAA), then the grade
+    const fxaa = new FXAAPass();
+    composer.addPass(fxaa);
+    const grade = new ShaderPass(GradeShader);
+    composer.addPass(grade);
 
     // ---- sky ----
     const skyGeo = new THREE.SphereGeometry(1, 24, 16);
@@ -791,13 +991,15 @@ export default function Field3D() {
       const gLean = new Float32Array(totalBlades);
       const gHue = new Float32Array(totalBlades);
       const gPhase = new Float32Array(totalBlades);
+      const gLY = new Float32Array(totalBlades);
       let b = 0;
       const addBlade = (
         x: number,
         z: number,
         h: number,
         hueV: number,
-        rand: () => number
+        rand: () => number,
+        lanternY: number
       ) => {
         gPos[b * 3] = x + (rand() - 0.5) * 3.4;
         gPos[b * 3 + 1] = 0;
@@ -807,13 +1009,14 @@ export default function Field3D() {
         gLean[b] = (rand() - 0.5) * 1.6;
         gHue[b] = hueV;
         gPhase[b] = rand() * Math.PI * 2;
+        gLY[b] = lanternY;
         b++;
       };
       ls.forEach((l) => {
-        const { wx, wz } = worldPos(l);
+        const { wx, wy, wz } = worldPos(l);
         const rand = prng(l.seed || 1);
         const h = 4.5 + 9 * Math.min(1, l.message.length / 280);
-        for (let k = 0; k < BLADES_PER; k++) addBlade(wx, wz, h, l.hue / 360, rand);
+        for (let k = 0; k < BLADES_PER; k++) addBlade(wx, wz, h, l.hue / 360, rand, wy);
       });
       const fillRand = prng(4242);
       for (let f = 0; f < FILLER; f++) {
@@ -821,7 +1024,7 @@ export default function Field3D() {
         const rr = Math.sqrt(fillRand()) * (fieldRadius + 60);
         const fx = Math.cos(ang) * rr;
         const fz = Math.sin(ang) * rr * 0.7;
-        for (let k = 0; k < 5; k++) addBlade(fx, fz, 4.0, 0.42, fillRand);
+        for (let k = 0; k < 5; k++) addBlade(fx, fz, 4.0, 0.42, fillRand, -1);
       }
 
       const bladeBase = new THREE.PlaneGeometry(0.62, 1, 1, 4);
@@ -837,6 +1040,7 @@ export default function Field3D() {
       gGeo.setAttribute("iLean", new THREE.InstancedBufferAttribute(gLean, 1));
       gGeo.setAttribute("iHue", new THREE.InstancedBufferAttribute(gHue, 1));
       gGeo.setAttribute("iPhase", new THREE.InstancedBufferAttribute(gPhase, 1));
+      gGeo.setAttribute("iLY", new THREE.InstancedBufferAttribute(gLY, 1));
       disposables.push(bladeBase, gGeo);
 
       const grassMat = new THREE.ShaderMaterial({
@@ -849,6 +1053,85 @@ export default function Field3D() {
       const grass = new THREE.Mesh(gGeo, grassMat);
       grass.frustumCulled = false;
       group.add(grass);
+
+      // pools of lantern-light on the water — the world receives the light
+      const pPX = new Float32Array(n * 2);
+      const pSize = new Float32Array(n);
+      const pHue = new Float32Array(n);
+      const pBright = new Float32Array(n);
+      const pPhase = new Float32Array(n);
+      ls.forEach((l, i) => {
+        const { wx, wy, wz } = worldPos(l);
+        pPX[i * 2] = wx;
+        pPX[i * 2 + 1] = wz;
+        // a higher lantern throws a wider, fainter pool
+        pSize[i] = 6 + wy * 0.55;
+        pHue[i] = l.hue / 360;
+        pBright[i] =
+          (0.55 + 0.45 * Math.min(1, (l.dna.brightness - 1) / 1.6)) * (16 / (12 + wy));
+        pPhase[i] = (l.seed % 628) / 100;
+      });
+      const poolBase = new THREE.PlaneGeometry(1, 1);
+      const poolGeo = new THREE.InstancedBufferGeometry();
+      poolGeo.index = poolBase.index;
+      poolGeo.attributes.position = poolBase.attributes.position;
+      poolGeo.attributes.uv = poolBase.attributes.uv;
+      poolGeo.instanceCount = n;
+      poolGeo.setAttribute("iPX", new THREE.InstancedBufferAttribute(pPX, 2));
+      poolGeo.setAttribute("iSize", new THREE.InstancedBufferAttribute(pSize, 1));
+      poolGeo.setAttribute("iHue", new THREE.InstancedBufferAttribute(pHue, 1));
+      poolGeo.setAttribute("iBright", new THREE.InstancedBufferAttribute(pBright, 1));
+      poolGeo.setAttribute("iPhase", new THREE.InstancedBufferAttribute(pPhase, 1));
+      const poolMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: uniforms.uTime, uMotion: uniforms.uMotion },
+        vertexShader: POOL_VERT,
+        fragmentShader: POOL_FRAG,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const pools = new THREE.Mesh(poolGeo, poolMat);
+      pools.frustumCulled = false;
+      pools.renderOrder = 5;
+      group.add(pools);
+      disposables.push(poolBase, poolGeo, poolMat);
+
+      // banks of low mist drifting over the water between the lights
+      const MISTN = 26;
+      const mC = new Float32Array(MISTN * 3);
+      const mS = new Float32Array(MISTN);
+      const mSeed = new Float32Array(MISTN);
+      const mr = prng(777);
+      for (let i = 0; i < MISTN; i++) {
+        const ang = mr() * Math.PI * 2;
+        const rr = (0.35 + mr() * 0.75) * (fieldRadius + 60);
+        mC[i * 3] = Math.cos(ang) * rr;
+        mC[i * 3 + 1] = 3 + mr() * 7;
+        mC[i * 3 + 2] = Math.sin(ang) * rr * 0.8;
+        mS[i] = 30 + mr() * 55;
+        mSeed[i] = mr() * 10;
+      }
+      const mistBase = new THREE.PlaneGeometry(1, 1);
+      const mistGeo = new THREE.InstancedBufferGeometry();
+      mistGeo.index = mistBase.index;
+      mistGeo.attributes.position = mistBase.attributes.position;
+      mistGeo.attributes.uv = mistBase.attributes.uv;
+      mistGeo.instanceCount = MISTN;
+      mistGeo.setAttribute("iC", new THREE.InstancedBufferAttribute(mC, 3));
+      mistGeo.setAttribute("iS", new THREE.InstancedBufferAttribute(mS, 1));
+      mistGeo.setAttribute("iSeed", new THREE.InstancedBufferAttribute(mSeed, 1));
+      const mistMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: uniforms.uTime },
+        vertexShader: MIST_VERT,
+        fragmentShader: MIST_FRAG,
+        transparent: true,
+        depthWrite: false,
+      });
+      const mist = new THREE.Mesh(mistGeo, mistMat);
+      mist.frustumCulled = false;
+      mist.renderOrder = 12;
+      group.add(mist);
+      disposables.push(mistBase, mistGeo, mistMat);
 
       fieldGroup = group;
       scene.add(group);
@@ -866,8 +1149,10 @@ export default function Field3D() {
     const applyFraming = () => {
       const d = fieldRadius * 0.72 + 70;
       const cx = fieldRadius * 0.3;
-      cam.target.set(cx, Math.max(10, fieldMeanY * 0.55), d);
-      const look = new THREE.Vector3(0, fieldMeanY * 0.9, 0).sub(cam.target);
+      // low over the water: lanterns stand against the sky, their pools of
+      // light stretch toward the viewer
+      cam.target.set(cx, Math.max(7, fieldMeanY * 0.34), d);
+      const look = new THREE.Vector3(0, fieldMeanY * 0.85, 0).sub(cam.target);
       cam.yaw = Math.atan2(-look.x, -look.z);
       cam.pitch = Math.asin(look.y / look.length());
       cam.vel.set(0, 0, 0);
@@ -1143,6 +1428,7 @@ export default function Field3D() {
       if (motion) {
         uniforms.uTime.value = now / 1000;
         waterUniforms.uTime.value = now / 1000;
+        grade.uniforms.uTime.value = now / 1000;
       }
 
       scratchEuler.set(cam.pitch, cam.yaw, 0, "YXZ");
@@ -1229,6 +1515,8 @@ export default function Field3D() {
       bloom.dispose();
       outputPass.dispose();
       renderPass.dispose();
+      fxaa.dispose();
+      grade.dispose();
       composer.dispose();
       skyGeo.dispose();
       skyMat.dispose();
