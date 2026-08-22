@@ -157,6 +157,12 @@ code.inline {
   touch-action: none;
 }
 
+.field-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .field-canvas.dragging {
   cursor: grabbing;
 }

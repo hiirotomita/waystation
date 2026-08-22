@@ -1,5 +1,5 @@
-import Field from "@/components/Field";
+import Field3D from "@/components/Field3D";
 
 export default function Home() {
-  return <Field />;
+  return <Field3D />;
 }
