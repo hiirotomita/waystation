@@ -9,6 +9,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { FXAAPass } from "three/examples/jsm/postprocessing/FXAAPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 import { Lantern, LanternDNA, lanternDNA, place, prng } from "@/lib/lanterns";
 
 type FieldLantern = Lantern & { dna: LanternDNA; x: number; y: number };
@@ -168,6 +169,7 @@ const SHELL_VERT = /* glsl */ `
   varying float vT;      // 0 at base, 1 at crown
   varying float vA;      // around the lathe, for paper grain
   varying vec3 vNormalV;
+  varying vec3 vNormalW;
   ${GLSL_WIND}
 
   void main() {
@@ -191,6 +193,7 @@ const SHELL_VERT = /* glsl */ `
     vec3 world = p + iOffset + vec3(0.0, bob, 0.0);
 
     vNormalV = normalize(normalMatrix * normal);
+    vNormalW = normal; // instances are unrotated bar a tiny sway
     vec4 mv = modelViewMatrix * vec4(world, 1.0);
     float dist = -mv.z;
     vFade = clamp(1.0 - (dist - 300.0) / 900.0, 0.10, 1.0);
@@ -212,6 +215,7 @@ const SHELL_FRAG = /* glsl */ `
   varying float vT;
   varying float vA;
   varying vec3 vNormalV;
+  varying vec3 vNormalW;
 
   // faceted families (diamond/hex) put huge flat faces in the belly band, so
   // each shape family scales its inner flame to stay below bloom-blowout
@@ -244,6 +248,11 @@ const SHELL_FRAG = /* glsl */ `
     float lum = 0.42 + 0.34 * clamp(vBright - 1.0, 0.0, 2.5);
     col *= (0.30 + 1.25 * belly) * lum * vFlick;
     if (vSel > 0.5) col += vec3(0.18, 0.17, 0.14);
+
+    // the moon kisses the shells on its side — a cool rim against the warm paper
+    float rim = pow(1.0 - abs(vNormalV.z), 2.2)
+              * clamp(dot(normalize(vNormalW), normalize(vec3(-0.55, 0.34, -0.72))), 0.0, 1.0);
+    col += vec3(0.085, 0.115, 0.165) * rim;
 
     // keep the paper below full white so bloom adds glow, not erasure
     col = min(col, vec3(1.05));
@@ -334,43 +343,58 @@ const GRASS_FRAG = /* glsl */ `
 
 /* ---------------- still water ---------------- */
 
-const WATER_VERT = /* glsl */ `
-  varying vec3 vWorld;
-  void main() {
-    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
+// The water is a true planar reflection of the whole scene — lanterns, moon,
+// mist — rendered each frame and sampled through moving procedural ripples.
+// The moon's path and every lantern's shimmer are real optics, not paint.
+const WaterShader = {
+  name: "MarshWater",
+  uniforms: {
+    color: { value: null as THREE.Color | null },
+    tDiffuse: { value: null as THREE.Texture | null },
+    textureMatrix: { value: null as THREE.Matrix4 | null },
+    uTime: { value: 0 },
+    uMotion: { value: 1 },
+  },
+  vertexShader: /* glsl */ `
+    uniform mat4 textureMatrix;
+    varying vec4 vUvR;
+    varying vec3 vWorld;
+    void main() {
+      vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+      vUvR = textureMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uMotion;
+    varying vec4 vUvR;
+    varying vec3 vWorld;
 
-const WATER_FRAG = /* glsl */ `
-  precision highp float;
-  varying vec3 vWorld;
-  uniform float uTime;
-  uniform vec3 uCam;
-  uniform float uMotion;
+    void main() {
+      float t = uTime * uMotion;
+      vec2 p = vWorld.xz;
+      // three interfering wave trains; their gradient bends the reflection
+      float w1 = sin(p.x * 0.110 + t * 0.70) * cos(p.y * 0.090 - t * 0.50);
+      float w2 = sin((p.x + p.y) * 0.230 - t * 1.10);
+      float w3 = sin(p.x * 0.050 - p.y * 0.075 + t * 0.35);
+      vec2 duv = vec2(w1 + w2 * 0.6, w2 * 0.5 + w3) * 0.011;
 
-  void main() {
-    vec3 dir = normalize(vWorld - uCam);
-    float grazing = pow(1.0 - clamp(-dir.y, 0.0, 1.0), 3.0);
+      vec4 uvp = vUvR;
+      uvp.xy += duv * uvp.w; // constant screen-space distortion
+      vec3 refl = texture2DProj(tDiffuse, uvp).rgb;
 
-    vec3 deep = vec3(0.0035, 0.0065, 0.011);
-    vec3 skyRef = vec3(0.020, 0.042, 0.062);
-
-    float t = uTime * uMotion;
-    float r1 = sin(vWorld.x * 0.070 + t * 0.5) * sin(vWorld.z * 0.058 - t * 0.35);
-    float r2 = sin((vWorld.x + vWorld.z * 1.3) * 0.13 + t * 0.8);
-    float r3 = sin((vWorld.x * 0.9 - vWorld.z) * 0.21 - t * 0.6);
-    float ripple = r1 * 0.5 + r2 * 0.3 + r3 * 0.2;
-
-    vec3 col = mix(deep, skyRef, grazing + ripple * 0.06);
-    // the moon lays its path on the water, broken by the ripples
-    vec2 vd = normalize(vWorld.xz - uCam.xz);
-    vec2 moonAz = normalize(vec2(-0.55, -0.72));
-    float path = pow(max(dot(vd, moonAz), 0.0), 60.0) * grazing;
-    col += vec3(0.09, 0.10, 0.11) * path * (0.55 + 0.45 * ripple);
-    gl_FragColor = vec4(col, 1.0);
-  }
-`;
+      vec3 viewDir = normalize(cameraPosition - vWorld);
+      float fres = pow(1.0 - clamp(viewDir.y, 0.0, 1.0), 2.0);
+      vec3 deep = vec3(0.004, 0.007, 0.012);
+      // still water: mostly mirror at grazing angles, ink straight down
+      vec3 col = deep + refl * (0.22 + 0.58 * fres);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
 
 /* ---------------- sky dome ---------------- */
 
@@ -465,8 +489,81 @@ const POOL_FRAG = /* glsl */ `
     // ripple rings spreading through the pool of light
     float rings = 0.82 + 0.18 * sin(r * 16.0 - uTime * 1.4 * uMotion + vPhase);
     vec3 col = mix(vec3(1.0, 0.88, 0.66), hsl2rgb(vHue, 0.55, 0.55), 0.5);
-    float a = fall * rings * 0.26 * vBright * vFadeP;
+    float a = fall * rings * 0.20 * vBright * vFadeP;
     if (a < 0.004) discard;
+    gl_FragColor = vec4(col, a);
+  }
+`;
+
+/* ---------------- beams: lantern light falling through night air ----------- */
+
+const BEAM_VERT = /* glsl */ `
+  attribute vec2 iPX;
+  attribute float iLYb;
+  attribute float iHue;
+  attribute float iBright;
+  attribute float iPhase;
+
+  uniform float uTime;
+  uniform float uMotion;
+
+  varying float vX;
+  varying float vY;
+  varying float vHue;
+  varying float vBright;
+  varying float vFlickB;
+  varying float vFadeB;
+  varying float vPhase;
+
+  void main() {
+    vX = position.x * 2.0;   // -1 .. 1 across the beam
+    vY = position.y + 0.5;   // 0 at the water, 1 at the lantern
+    vHue = iHue;
+    vBright = iBright;
+    vPhase = iPhase;
+    vFlickB = 0.8 + 0.2 * sin(uTime * 1.7 + iPhase) * uMotion;
+
+    // cylindrical billboard: the sheet always faces the camera
+    vec3 c = vec3(iPX.x, 0.0, iPX.y);
+    vec3 toCam = normalize(vec3(cameraPosition.x - c.x, 0.0, cameraPosition.z - c.z));
+    vec3 rightv = vec3(-toCam.z, 0.0, toCam.x);
+    float width = 1.3 + (1.0 - vY) * 2.0; // flares gently toward the water
+    vec3 world = c + rightv * position.x * width * 2.0 + vec3(0.0, vY * iLYb, 0.0);
+    vec4 mv = modelViewMatrix * vec4(world, 1.0);
+    // fade with distance, and vanish when the camera is inside the beam
+    vFadeB = clamp(1.0 - (-mv.z - 200.0) / 700.0, 0.0, 1.0) * smoothstep(10.0, 40.0, -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const BEAM_FRAG = /* glsl */ `
+  precision highp float;
+
+  varying float vX;
+  varying float vY;
+  varying float vHue;
+  varying float vBright;
+  varying float vFlickB;
+  varying float vFadeB;
+  varying float vPhase;
+
+  uniform float uTime;
+
+  ${GLSL_NOISE}
+
+  vec3 hsl2rgb(float h, float s, float l) {
+    vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+  }
+
+  void main() {
+    float horiz = pow(max(1.0 - abs(vX), 0.0), 2.2);
+    float vert = smoothstep(0.0, 0.25, vY) * (0.25 + 0.75 * pow(vY, 1.7));
+    // slow motes of light sinking through the shaft
+    float streak = 0.7 + 0.3 * vnoise(vec2(vX * 2.0 + vPhase, vY * 3.0 - uTime * 0.10));
+    vec3 col = mix(vec3(1.0, 0.86, 0.60), hsl2rgb(vHue, 0.5, 0.6), 0.5);
+    float a = horiz * vert * streak * 0.038 * (0.7 + 0.5 * vBright) * vFlickB * vFadeB;
+    if (a < 0.003) discard;
     gl_FragColor = vec4(col, a);
   }
 `;
@@ -533,6 +630,9 @@ const GradeShader = {
     varying vec2 vUv;
     void main() {
       vec4 c = texture2D(tDiffuse, vUv);
+      // split-tone: teal shadows, amber highlights — the marsh's color script
+      float lum2 = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+      c.rgb *= mix(vec3(0.93, 1.0, 1.10), vec3(1.06, 1.0, 0.92), smoothstep(0.08, 0.65, lum2));
       float d = distance(vUv, vec2(0.5, 0.46));
       c.rgb *= 1.0 - 0.30 * smoothstep(0.44, 0.95, d);
       float g = fract(sin(dot(vUv * 917.0, vec2(12.9898, 78.233)) + uTime * 61.0) * 43758.5453);
@@ -725,23 +825,26 @@ export default function Field3D() {
     sky.renderOrder = -2;
     scene.add(sky);
 
-    // ---- water ----
-    const waterUniforms = {
-      uTime: { value: 0 },
-      uCam: { value: new THREE.Vector3() },
-      uMotion: { value: 1 },
-    };
+    // ---- water: a real planar reflection of the scene ----
     const waterGeo = new THREE.PlaneGeometry(9000, 9000, 1, 1);
-    const waterMat = new THREE.ShaderMaterial({
-      uniforms: waterUniforms,
-      vertexShader: WATER_VERT,
-      fragmentShader: WATER_FRAG,
+    const water = new Reflector(waterGeo, {
+      clipBias: 0.003,
+      textureWidth: 768,
+      textureHeight: 768,
+      shader: WaterShader,
+      // multisampled HalfFloat targets silently render black on some
+      // WebGL2 stacks (same failure as the composer's custom target)
+      multisample: 0,
     });
-    const water = new THREE.Mesh(waterGeo, waterMat);
     water.rotation.x = -Math.PI / 2;
     water.frustumCulled = false;
     water.renderOrder = -1;
     scene.add(water);
+    const waterMat = water.material as THREE.ShaderMaterial;
+    const waterUniforms = waterMat.uniforms as {
+      uTime: { value: number };
+      uMotion: { value: number };
+    };
 
     // ---- soft-dot texture for stars/motes ----
     const spriteCanvas = document.createElement("canvas");
@@ -813,15 +916,6 @@ export default function Field3D() {
       uOpacity: { value: 1 },
       uSelected: { value: -1 },
     };
-    const mirrorUniforms = {
-      uTime: uniforms.uTime,
-      uScale: uniforms.uScale,
-      uDPR: uniforms.uDPR,
-      uMotion: uniforms.uMotion,
-      uOpacity: { value: 0.22 },
-      uSelected: uniforms.uSelected,
-    };
-
     // declared before rebuild() so the early "data already loaded" rebuild
     // call can't hit the temporal dead zone
     const keys = new Set<string>();
@@ -908,22 +1002,7 @@ export default function Field3D() {
       glow.renderOrder = 20;
       group.add(glow);
 
-      // reflections on the water — same lights, inverted, dimmed
-      const mirrorMat = new THREE.ShaderMaterial({
-        uniforms: mirrorUniforms,
-        vertexShader: GLOW_VERT,
-        fragmentShader: GLOW_FRAG,
-        transparent: true,
-        depthWrite: false,
-        depthTest: false,
-        blending: THREE.AdditiveBlending,
-      });
-      disposables.push(mirrorMat);
-      const mirror = new THREE.Points(glowGeo, mirrorMat);
-      mirror.frustumCulled = false;
-      mirror.scale.set(1, -0.8, 1);
-      mirror.renderOrder = 10;
-      group.add(mirror);
+      // (no faked mirror sprites — the Reflector water reflects the real scene)
 
       // shells — one instanced mesh per shape family
       for (let s = 0; s < 4; s++) {
@@ -1095,6 +1174,40 @@ export default function Field3D() {
       pools.renderOrder = 5;
       group.add(pools);
       disposables.push(poolBase, poolGeo, poolMat);
+
+      // shafts of light between each lantern and its pool
+      const bLY = new Float32Array(n);
+      const bPhase = new Float32Array(n);
+      ls.forEach((l, i) => {
+        const { wy } = worldPos(l);
+        bLY[i] = wy;
+        bPhase[i] = ((l.seed >>> 3) % 628) / 100;
+      });
+      const beamBase = new THREE.PlaneGeometry(1, 1, 1, 6);
+      const beamGeo = new THREE.InstancedBufferGeometry();
+      beamGeo.index = beamBase.index;
+      beamGeo.attributes.position = beamBase.attributes.position;
+      beamGeo.attributes.uv = beamBase.attributes.uv;
+      beamGeo.instanceCount = n;
+      beamGeo.setAttribute("iPX", new THREE.InstancedBufferAttribute(pPX, 2));
+      beamGeo.setAttribute("iLYb", new THREE.InstancedBufferAttribute(bLY, 1));
+      beamGeo.setAttribute("iHue", new THREE.InstancedBufferAttribute(pHue, 1));
+      beamGeo.setAttribute("iBright", new THREE.InstancedBufferAttribute(pBright, 1));
+      beamGeo.setAttribute("iPhase", new THREE.InstancedBufferAttribute(bPhase, 1));
+      const beamMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: uniforms.uTime, uMotion: uniforms.uMotion },
+        vertexShader: BEAM_VERT,
+        fragmentShader: BEAM_FRAG,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const beams = new THREE.Mesh(beamGeo, beamMat);
+      beams.frustumCulled = false;
+      beams.renderOrder = 6;
+      group.add(beams);
+      disposables.push(beamBase, beamGeo, beamMat);
 
       // banks of low mist drifting over the water between the lights
       const MISTN = 26;
@@ -1467,7 +1580,6 @@ export default function Field3D() {
 
       camera.position.copy(cam.pos);
       camera.rotation.set(cam.pitch, cam.yaw, 0, "YXZ");
-      waterUniforms.uCam.value.copy(cam.pos);
 
       if (motion) {
         const mp = moteGeo.attributes.position as THREE.BufferAttribute;
@@ -1520,6 +1632,7 @@ export default function Field3D() {
       composer.dispose();
       skyGeo.dispose();
       skyMat.dispose();
+      water.getRenderTarget().dispose();
       waterGeo.dispose();
       waterMat.dispose();
       starGeo.dispose();
