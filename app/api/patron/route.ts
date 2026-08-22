@@ -1,19 +1,29 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db, dbAdmin, rateKey } from "@/lib/db";
 import { createCheckoutSession, stripeEnabled } from "@/lib/stripe";
+import { filterPatronName, UUID_RE } from "@/lib/filter";
 
 export const runtime = "nodejs";
 
 function requestOrigin(req: Request): string {
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "waystation.world";
+  const host =
+    req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "waystation.world";
   const proto = req.headers.get("x-forwarded-proto") ?? "https";
   return `${proto}://${host}`;
 }
 
 // POST /api/patron  { lantern_id, amount_cents, patron_name? }
 export async function POST(req: Request) {
-  if (!stripeEnabled()) {
+  // Never sell what we cannot deliver: recording a gift needs the service key.
+  if (!stripeEnabled() || !dbAdmin()) {
     return NextResponse.json({ ok: false, error: "gifts_not_open_yet" }, { status: 503 });
+  }
+
+  // basic per-visitor rate limit so an anon POST flood can't mint sessions
+  try {
+    rateKey(req);
+  } catch {
+    return NextResponse.json({ ok: false, error: "unavailable" }, { status: 503 });
   }
 
   let body: Record<string, unknown>;
@@ -24,7 +34,7 @@ export async function POST(req: Request) {
   }
 
   const lanternId = typeof body.lantern_id === "string" ? body.lantern_id : "";
-  if (!/^[0-9a-f-]{36}$/.test(lanternId)) {
+  if (!UUID_RE.test(lanternId)) {
     return NextResponse.json({ ok: false, error: "invalid_lantern" }, { status: 400 });
   }
 
@@ -36,10 +46,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const patronName =
-    typeof body.patron_name === "string"
-      ? body.patron_name.replace(/\s+/g, " ").trim().slice(0, 40) || null
-      : null;
+  const patronName = filterPatronName(body.patron_name);
 
   const { data: lantern } = await db()
     .from("lanterns")
