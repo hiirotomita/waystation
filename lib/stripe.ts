@@ -34,8 +34,14 @@ export async function createCheckoutSession(opts: {
     success_url: `${opts.origin}/patron/thanks?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${opts.origin}/patron/${opts.lanternId}`,
     "metadata[lantern_id]": opts.lanternId,
+    // also stamp the PaymentIntent so charge-level events (refund/dispute)
+    // carry the lantern id
+    "payment_intent_data[metadata][lantern_id]": opts.lanternId,
   });
-  if (opts.patronName) body.set("metadata[patron_name]", opts.patronName);
+  if (opts.patronName) {
+    body.set("metadata[patron_name]", opts.patronName);
+    body.set("payment_intent_data[metadata][patron_name]", opts.patronName);
+  }
 
   const res = await fetch(`${API}/checkout/sessions`, {
     method: "POST",
@@ -70,6 +76,7 @@ export async function retrieveSession(sessionId: string): Promise<{
   amountCents: number;
   lanternId: string | null;
   patronName: string | null;
+  paymentIntent: string | null;
 } | null> {
   const res = await fetch(
     `${API}/checkout/sessions/${encodeURIComponent(sessionId)}`,
@@ -82,6 +89,7 @@ export async function retrieveSession(sessionId: string): Promise<{
     amountCents: typeof data.amount_total === "number" ? data.amount_total : 0,
     lanternId: data.metadata?.lantern_id ?? null,
     patronName: data.metadata?.patron_name ?? null,
+    paymentIntent: typeof data.payment_intent === "string" ? data.payment_intent : null,
   };
 }
 

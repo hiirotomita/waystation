@@ -59,22 +59,33 @@ function salted(value: string): string {
   return createHash("sha256").update(`${salt}:${value}`).digest("hex").slice(0, 32);
 }
 
+// Canonicalize an IPv6 address to a /N prefix hash bucket. Handles compressed
+// forms (::) by expanding to 8 hextets first.
+function ipv6Prefix(ip: string, groups: number): string {
+  const [head, tail = ""] = ip.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const fill = Array(Math.max(0, 8 - h.length - t.length)).fill("0");
+  const full = [...h, ...fill, ...t].slice(0, 8);
+  return full.slice(0, groups).join(":") + `::/${groups * 16}`;
+}
+
 // Rate-limit identity: IPv6 bucketed to /64.
 export function rateKey(req: Request): string {
   let ip = connectingIp(req);
-  if (ip.includes(":") && ip !== "unknown") {
-    ip = ip.split(":").slice(0, 4).join(":") + "::/64";
-  }
+  if (ip.includes(":") && ip !== "unknown") ip = ipv6Prefix(ip, 4);
   return salted(ip);
 }
 
-// Reporter identity for the distinct-reporter count. Bucketed to /48 so a
-// single routed IPv6 allocation can't mint thousands of "distinct" reporters
-// to censor a lantern.
+// Reporter identity for the distinct-reporter count. Bucketed hard — IPv6 to
+// /48, IPv4 to /24 — so a small proxy pool or a single routed allocation
+// cannot mint the distinct reporters needed to censor a lantern.
 export function reporterKey(req: Request): string {
   let ip = connectingIp(req);
   if (ip.includes(":") && ip !== "unknown") {
-    ip = ip.split(":").slice(0, 3).join(":") + "::/48";
+    ip = ipv6Prefix(ip, 3);
+  } else if (ip !== "unknown" && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+    ip = ip.split(".").slice(0, 3).join(".") + ".0/24";
   }
   return salted(ip);
 }

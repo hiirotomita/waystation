@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db, dbAdmin, rateKey } from "@/lib/db";
 import { createCheckoutSession, stripeEnabled } from "@/lib/stripe";
 import { filterPatronName, UUID_RE } from "@/lib/filter";
+import { moderate } from "@/lib/moderation";
 
 export const runtime = "nodejs";
 
@@ -57,7 +58,12 @@ export async function POST(req: Request) {
     );
   }
 
-  const patronName = filterPatronName(body.patron_name);
+  let patronName = filterPatronName(body.patron_name);
+  // the display name is public — run it through the classifier too
+  if (patronName) {
+    const m = await moderate(patronName);
+    if (!m.ok) patronName = null;
+  }
 
   const { data: lantern } = await db()
     .from("lanterns")

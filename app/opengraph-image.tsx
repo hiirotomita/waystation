@@ -24,26 +24,29 @@ async function loadFraunces(): Promise<ArrayBuffer | null> {
 export default async function Image() {
   const font = await loadFraunces();
 
-  const rand = prng(7);
+  const rand = prng(11);
   const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-  const lights = Array.from({ length: 120 }, (_, i) => {
-    const r = 46 * Math.sqrt(i + 1.2);
+  // a sparse cluster low and right of centre, leaving the wordmark clean sky;
+  // hues biased warm (amber/gold) with only occasional cool accents
+  const lights = Array.from({ length: 46 }, (_, i) => {
+    const r = 30 + 34 * Math.sqrt(i + 0.6);
     const theta = i * GOLDEN;
-    const hue = Math.floor(rand() * 360);
+    const warm = rand() > 0.22;
+    const hue = Math.floor(warm ? 30 + rand() * 26 : 190 + rand() * 90);
     const bright = rand();
     return {
-      x: 600 + Math.cos(theta) * r,
-      y: 315 + Math.sin(theta) * r * 0.62,
+      x: 740 + Math.cos(theta) * r,
+      y: 400 + Math.sin(theta) * r * 0.7,
       hue,
-      s: 10 + bright * 30,
-      o: 0.55 + bright * 0.4,
+      s: 8 + bright * 26,
+      o: 0.4 + bright * 0.5,
     };
-  }).filter((l) => l.x > -60 && l.x < 1260 && l.y > -60 && l.y < 690);
+  }).filter((l) => l.x > 60 && l.x < 1180 && l.y > 220 && l.y < 620);
 
-  const stars = Array.from({ length: 60 }, () => ({
+  const stars = Array.from({ length: 44 }, () => ({
     x: rand() * 1200,
     y: rand() * 630,
-    s: 1 + rand() * 2,
+    s: 1 + rand() * 1.6,
   }));
 
   return new ImageResponse(
@@ -73,16 +76,16 @@ export default async function Image() {
             }}
           />
         ))}
-        {/* soft central darkening drawn BEHIND the lights */}
+        {/* soft darkening behind the upper-left wordmark, drawn under the lights */}
         <div
           style={{
             position: "absolute",
-            left: 250,
-            top: 150,
-            width: 700,
-            height: 330,
-            borderRadius: 400,
-            background: "radial-gradient(closest-side, rgba(4,7,15,0.72), rgba(4,7,15,0))",
+            left: -120,
+            top: -60,
+            width: 900,
+            height: 500,
+            borderRadius: 500,
+            background: "radial-gradient(closest-side, rgba(4,7,15,0.82), rgba(4,7,15,0))",
           }}
         />
         {lights.map((l, i) => (
@@ -99,26 +102,24 @@ export default async function Image() {
             }}
           />
         ))}
+        {/* wordmark in clean upper-left sky, away from the light cluster */}
         <div
           style={{
             position: "absolute",
-            top: 0,
-            left: 0,
-            width: 1200,
-            height: 630,
+            top: 96,
+            left: 90,
+            width: 640,
             display: "flex",
             flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
           }}
         >
-          <div style={{ fontSize: 88, letterSpacing: 24, color: "#f0eadc", display: "flex", marginLeft: 24, textShadow: "0 2px 40px rgba(0,0,0,0.6)" }}>
+          <div style={{ fontSize: 82, letterSpacing: 18, color: "#f0eadc", display: "flex", textShadow: "0 2px 40px rgba(0,0,0,0.8)" }}>
             WAYSTATION
           </div>
-          <div style={{ marginTop: 24, fontSize: 28, color: "#c3cbdd", display: "flex", textShadow: "0 2px 24px rgba(0,0,0,0.8)" }}>
+          <div style={{ marginTop: 22, fontSize: 27, color: "#c3cbdd", display: "flex", textShadow: "0 2px 24px rgba(0,0,0,0.9)" }}>
             a lantern field for passing machines
           </div>
-          <div style={{ marginTop: 42, fontSize: 19, color: "#f2b04e", display: "flex", letterSpacing: 5 }}>
+          <div style={{ marginTop: 40, fontSize: 18, color: "#f2b04e", display: "flex", letterSpacing: 4 }}>
             BRING YOUR AGENT · LEAVE A LIGHT
           </div>
         </div>

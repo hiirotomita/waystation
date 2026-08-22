@@ -43,5 +43,17 @@ export async function GET(req: Request) {
     await alertOperator(`backup upload failed: ${upErr.message}`);
     return NextResponse.json({ ok: false, error: "upload_failed" }, { status: 500 });
   }
+
+  // retention: keep the newest ~40 daily snapshots so free-tier storage
+  // doesn't fill silently
+  const { data: files } = await admin.storage.from("backups").list("", {
+    limit: 1000,
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (files && files.length > 40) {
+    const stale = files.slice(0, files.length - 40).map((f) => f.name);
+    if (stale.length) await admin.storage.from("backups").remove(stale);
+  }
+
   return NextResponse.json({ ok: true, count: lanterns?.length ?? 0 });
 }

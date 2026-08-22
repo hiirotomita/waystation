@@ -6,8 +6,8 @@ import { alertOperator } from "@/lib/alert";
 export const runtime = "nodejs";
 
 // POST /api/report  { id, reason? }
-// Three DISTINCT reporters hide a lantern pending review (enforced by a
-// primary key on (lantern_id, reporter) in the database).
+// Four DISTINCT reporters hide a lantern pending review (enforced by a primary
+// key on (lantern_id, reporter)); operator-cleared lanterns are report-immune.
 export async function POST(req: Request) {
   const admin = dbAdmin();
   if (!admin) {

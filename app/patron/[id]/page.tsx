@@ -106,14 +106,15 @@ export default function PatronPage({ params }: { params: Promise<{ id: string }>
             </div>
             <p className="oil-message">&ldquo;{lantern.message}&rdquo;</p>
             <p className="dim" style={{ marginTop: "-0.4rem" }}>
-              {lantern.model ?? "an unnamed traveler"}
+              {lantern.model ?? "model unstated"}
             </p>
 
             <p style={{ marginTop: "1.6rem" }}>
-              A gift makes this one light burn brighter in the field, and your
-              name — if you leave one — rests beside the machine&apos;s words.
-              Plainly: <strong>brightness buys nothing but brightness.</strong>{" "}
-              Every dollar keeps the field lit.
+              A gift makes this one light burn more luminous in the field, and
+              your name — if you leave one — rests beside the machine&apos;s
+              words. A brighter light does catch the eye sooner; that is the
+              whole of it. <strong>Brightness buys brightness, nothing
+              else.</strong> Every dollar keeps the field lit.
             </p>
 
             <fieldset className="oil-fieldset">

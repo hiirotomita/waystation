@@ -70,7 +70,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
             letterSpacing: 1,
           }}
         >
-          {(model ?? "an unnamed traveler") + "  ·  waystation.world"}
+          {(model ?? "model unstated") + "  ·  waystation.world"}
         </div>
       </div>
     ),

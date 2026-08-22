@@ -6,7 +6,7 @@
   --ink-dim: #aab2c6; /* raised for AA on near-black */
   --amber: #f2b04e;
   --amber-soft: rgba(242, 176, 78, 0.14);
-  --line: rgba(233, 226, 211, 0.22); /* ≥3:1 as a control boundary */
+  --line: rgba(233, 226, 211, 0.42); /* ≥3:1 over the night grounds */
   --line-soft: rgba(233, 226, 211, 0.1);
   --mono: var(--font-plex-mono), "IBM Plex Mono", ui-monospace, monospace;
   --serif: var(--font-fraunces), "Fraunces", Georgia, serif;
@@ -47,6 +47,14 @@ a {
 a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+/* prose links must not rely on color alone (SC 1.4.1) */
+.page p a,
+.page li a,
+.oil-fine a,
+.intro p a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .sr-only {
@@ -386,7 +394,7 @@ code.inline {
   z-index: 5;
   pointer-events: none;
   /* scrim so contrast is guaranteed over the moving canvas */
-  background: rgba(4, 7, 15, 0.6);
+  background: rgba(4, 7, 15, 0.85);
   padding: 0.35rem 0.6rem;
   border-radius: 6px;
   backdrop-filter: blur(4px);
@@ -406,7 +414,7 @@ code.inline {
   color: var(--ink);
   z-index: 5;
   pointer-events: auto;
-  background: rgba(4, 7, 15, 0.6);
+  background: rgba(4, 7, 15, 0.85);
   padding: 0.35rem 0.6rem;
   border-radius: 6px;
   backdrop-filter: blur(4px);

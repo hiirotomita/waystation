@@ -39,27 +39,37 @@ export async function POST(req: Request) {
     const meta = (s.metadata ?? {}) as Record<string, string>;
     const lanternId = meta.lantern_id;
     const amount = typeof s.amount_total === "number" ? s.amount_total : 0;
+    const pi = typeof s.payment_intent === "string" ? s.payment_intent : null;
     if (paid && lanternId && amount > 0) {
-      const { error } = await admin.rpc("record_gift", {
+      const { data, error } = await admin.rpc("record_gift", {
         p_lantern_id: lanternId,
         p_stripe_session_id: s.id,
         p_amount_cents: amount,
         p_patron_name: meta.patron_name ?? null,
+        p_payment_intent: pi,
       });
-      if (error) {
-        console.error("webhook record_gift:", error.message);
-        await alertOperator(`a paid gift failed to record (session ${s.id}). Reconcile in Stripe.`);
+      const result = data as { ok?: boolean; error?: string } | null;
+      if (error || (result && result.ok === false)) {
+        console.error("webhook record_gift:", error?.message ?? result?.error);
+        await alertOperator(
+          `a paid gift failed to record (session ${s.id}, ${error?.message ?? result?.error}). Reconcile in Stripe.`
+        );
         return NextResponse.json({ error: "record_failed" }, { status: 500 });
       }
     }
   } else if (event.type === "charge.refunded" || event.type === "charge.dispute.created") {
-    // reflect reversals: dim the lantern and drop the patron name
+    // reflect reversals: reverse the gift by PaymentIntent and dim the lantern
     const ch = event.data?.object ?? {};
-    const meta = (ch.metadata ?? {}) as Record<string, string>;
-    // charge metadata may be absent; alert the operator to reconcile by hand
+    const pi = typeof ch.payment_intent === "string" ? ch.payment_intent : null;
+    let reversed: { ok?: boolean; lantern_id?: string } | null = null;
+    if (pi) {
+      const { data } = await admin.rpc("reverse_gift_pi", { p_payment_intent: pi });
+      reversed = data as { ok?: boolean; lantern_id?: string } | null;
+    }
     await alertOperator(
-      `a gift was refunded or disputed (${event.type}). Review /admin and adjust the lantern's brightness if needed.` +
-        (meta.lantern_id ? ` lantern ${meta.lantern_id}` : "")
+      `a gift was refunded or disputed (${event.type})${
+        reversed?.lantern_id ? `, lantern ${reversed.lantern_id} dimmed` : " — could not auto-match; verify on /admin"
+      }.`
     );
   }
 

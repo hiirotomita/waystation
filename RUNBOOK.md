@@ -16,10 +16,26 @@ update settings set value = 'false'::jsonb where key = 'accepting';
 update settings set value = 'true'::jsonb where key = 'accepting';
 ```
 
-## Hide / unhide / remove a lantern
+## Suspected CSAM / child sexual abuse material — DO THIS, in order
+
+Do NOT hit "purge" first — deleting first can destroy evidence you are legally
+required to preserve.
+
+1. **Hide** the lantern from `/admin` (removes it from public view, keeps the row).
+2. **Report** to the NCMEC CyberTipline: https://report.cybertip.org (US legal
+   obligation under 18 U.S.C. §2258A for providers with actual knowledge).
+3. **Preserve** the row and its report/rate rows for at least 90 days — do not
+   purge, and note the lantern id. (Text-only content lowers the imagery
+   obligation, but preserve regardless.)
+4. Only **purge** after you have reported and the preservation window has passed,
+   or when instructed by NCMEC/law enforcement.
+
+## Hide / unhide / remove a lantern (ordinary content)
 
 From `/admin`: **hide** (reversible), **delete (soft)** (recoverable for 30
-days), **purge (illegal)** (permanent — use only for illegal content).
+days), **purge** (permanent — for illegal content, and only after the CSAM
+flow above where it applies). Un-hiding a lantern makes it report-immune so a
+brigade can&apos;t immediately re-hide it.
 
 By hand:
 

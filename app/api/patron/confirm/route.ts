@@ -49,6 +49,7 @@ export async function GET(req: Request) {
     p_stripe_session_id: sessionId,
     p_amount_cents: session.amountCents,
     p_patron_name: session.patronName,
+    p_payment_intent: session.paymentIntent,
   });
   if (error) {
     console.error("confirm record_gift:", error.message);

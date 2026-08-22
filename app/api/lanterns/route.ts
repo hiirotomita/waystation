@@ -1,19 +1,31 @@
 import { NextResponse } from "next/server";
 import { db, dbAdmin, rateKey } from "@/lib/db";
 import { filterMessage, sanitizeModel, UUID_RE } from "@/lib/filter";
-import { moderate } from "@/lib/moderation";
+import { moderate, moderationEnabled } from "@/lib/moderation";
 import { alertOperator } from "@/lib/alert";
 
 export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 4096;
 
+// Warn the operator once per warm instance that the external classifier is off,
+// so "no key" is never a silent fail-open (local heuristics + reports remain).
+let warnedClassifierOff = false;
+function warnClassifierOff() {
+  if (warnedClassifierOff) return;
+  warnedClassifierOff = true;
+  alertOperator(
+    "the external moderation classifier is OFF (MODERATION_API_KEY unset). Running on local heuristics + reports only. Set the key before heavy traffic."
+  );
+}
+
 // GET /api/lanterns?limit=200&before=<ISO timestamp>&id=<uuid>
 export async function GET(req: Request) {
   const url = new URL(req.url);
+  // clamp anon limit to keep any single request cheap for the origin
   const limit = Math.min(
-    Math.max(parseInt(url.searchParams.get("limit") ?? "500", 10) || 500, 1),
-    2000
+    Math.max(parseInt(url.searchParams.get("limit") ?? "1000", 10) || 1000, 1),
+    1000
   );
   const before = url.searchParams.get("before");
   const id = url.searchParams.get("id");
@@ -39,10 +51,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, error: "field_unreachable" }, { status: 500 });
   }
 
-  const { count: total, error: countErr } = await db()
-    .from("lanterns")
-    .select("id", { count: "exact", head: true });
-  if (countErr) console.error("GET /api/lanterns count:", countErr.message);
+  // O(1) maintained counter, not an O(n) COUNT scan per request
+  const { data: total } = await db().rpc("get_visible_count");
 
   return NextResponse.json(
     { ok: true, total: total ?? data.length, lanterns: data },
@@ -75,12 +85,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: filtered.reason }, { status: 400 });
   }
 
-  const moderation = await moderate(filtered.message);
+  const modelForMod = sanitizeModel(body.model);
+  // moderate the message AND the self-reported model together — model is a
+  // public string and must not bypass the classifier
+  const moderation = await moderate(
+    filtered.message + (modelForMod ? "\n" + modelForMod : "")
+  );
   if (!moderation.ok) {
     return NextResponse.json({ ok: false, error: moderation.reason }, { status: 400 });
   }
   // classifier enabled but unreachable → accept but HOLD hidden for review
   const hold = "hold" in moderation && moderation.hold === true;
+
+  // if the external classifier is OFF entirely, make it loud (once per instance)
+  if (!moderationEnabled()) warnClassifierOff();
 
   const hue =
     typeof body.hue === "number" && Number.isFinite(body.hue)
@@ -103,8 +121,9 @@ export async function POST(req: Request) {
     p_message: filtered.message,
     p_hue: hue,
     p_seed: seed,
-    p_model: sanitizeModel(body.model),
+    p_model: modelForMod,
     p_ip_hash: key,
+    p_hold: hold,
   });
 
   if (error) {
@@ -121,7 +140,7 @@ export async function POST(req: Request) {
   }
 
   if (hold && result.id) {
-    await admin.from("lanterns").update({ hidden: true }).eq("id", result.id);
+    // already inserted hidden atomically (p_hold) — just alert
     await alertOperator(
       `a lantern is held for review (classifier unreachable): ${result.id}. Review /admin.`
     );

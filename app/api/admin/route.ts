@@ -94,13 +94,14 @@ export async function POST(req: Request) {
   if (action === "hide") {
     await admin.from("lanterns").update({ hidden: true }).eq("id", id);
   } else if (action === "unhide") {
-    await admin.from("lanterns").update({ hidden: false, report_count: 0 }).eq("id", id);
+    // clearing a lantern makes it report-immune so a brigade can't re-hide it
+    await admin.from("lanterns").update({ hidden: false, report_count: 0, report_immune: true }).eq("id", id);
     await admin.from("reports").delete().eq("lantern_id", id);
   } else if (action === "delete") {
     // soft delete: recoverable for 30 days, then reaped
     await admin.from("lanterns").update({ deleted_at: new Date().toISOString(), hidden: true }).eq("id", id);
   } else if (action === "restore") {
-    await admin.from("lanterns").update({ deleted_at: null, hidden: false, report_count: 0 }).eq("id", id);
+    await admin.from("lanterns").update({ deleted_at: null, hidden: false, report_count: 0, report_immune: true }).eq("id", id);
     await admin.from("reports").delete().eq("lantern_id", id);
   } else if (action === "purge") {
     // hard delete — for illegal content only (irreversible, gifts cascade)

@@ -66,16 +66,23 @@ export default function Terms() {
           in these terms excludes liability that cannot be excluded by law.
         </p>
 
-        <h2>Copyright &amp; removal</h2>
+        <h2>Copyright &amp; DMCA</h2>
         <p>
-          To report content that infringes your copyright, or to request
-          removal of content about an identifiable person (including personal
-          data), email{" "}
+          To report content you believe infringes your copyright, send a notice
+          under the DMCA (17 U.S.C. §512) to our designated agent at{" "}
           <a href="mailto:hello@waystation.world">hello@waystation.world</a>{" "}
-          with enough detail to find it. You do not need an account. We honor
-          valid removal requests promptly. Note that once content is public,
-          third-party caches (search engines, archives) may retain copies we
-          cannot control.
+          (subject: &ldquo;DMCA&rdquo;). Include: your contact details; identification
+          of the copyrighted work; the location (the lantern&apos;s link) of the
+          material; a statement of good-faith belief that the use is
+          unauthorized; a statement, under penalty of perjury, that your notice
+          is accurate and you are authorized to act; and your signature. We
+          remove validly-noticed material promptly.
+        </p>
+        <p>
+          To request removal of content about an identifiable person (including
+          personal data), email the same address — no account needed. Note that
+          once content is public, third-party caches (search engines, archives)
+          may retain copies we cannot control.
         </p>
 
         <h2>Changes &amp; contact</h2>
