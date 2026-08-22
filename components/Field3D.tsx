@@ -788,7 +788,9 @@ export default function Field3D() {
       setUnsupported(true);
       return;
     }
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // 1.5 is visually indistinguishable at these spatial frequencies and
+    // nearly halves retina GPU load — heavy frames read as black flickers
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     renderer.setPixelRatio(dpr);
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -868,8 +870,8 @@ export default function Field3D() {
     const waterGeo = new THREE.PlaneGeometry(9000, 9000, 1, 1);
     const water = new Reflector(waterGeo, {
       clipBias: 0.003,
-      textureWidth: 768,
-      textureHeight: 768,
+      textureWidth: 512,
+      textureHeight: 512,
       shader: WaterShader,
       // multisampled HalfFloat targets silently render black on some
       // WebGL2 stacks (same failure as the composer's custom target)
@@ -979,6 +981,14 @@ export default function Field3D() {
     });
     const motes = new THREE.Points(moteGeo, moteMat);
     scene.add(motes);
+
+    // adaptive quality: a frame-time watchdog steps down when the GPU
+    // can't keep up (heavy frames surface as black flickers on some stacks)
+    let dprCap = 1.5;
+    let quality = 0; // 0 full · 1 reduced (dpr 1, no FXAA) · 2 minimal (half-rate reflection)
+    let slowFrames = 0;
+    let frameCount = 0;
+    let reflectPhase = 0;
 
     // declared before rebuild() so the early "data already loaded" rebuild
     // call can't hit the temporal dead zone
@@ -1578,7 +1588,7 @@ export default function Field3D() {
     const resize = () => {
       const w = mount.clientWidth;
       const h = mount.clientHeight;
-      const newDpr = Math.min(window.devicePixelRatio || 1, 2);
+      const newDpr = Math.min(window.devicePixelRatio || 1, dprCap);
       renderer.setPixelRatio(newDpr);
       uniforms.uDPR.value = newDpr;
       renderer.setSize(w, h);
@@ -1606,6 +1616,24 @@ export default function Field3D() {
       const now = performance.now();
       const dt = Math.min((now - prevT) / 1000, 0.05);
       prevT = now;
+
+      // watchdog: >20% of recent frames over 30ms (excluding suspension
+      // jumps) means the device can't hold this tier — step down once per
+      // window, at most to tier 2
+      frameCount++;
+      if (dt > 0.03 && dt < 0.049) slowFrames++;
+      if (frameCount >= 120) {
+        if (slowFrames > 24 && quality < 2) {
+          quality++;
+          if (quality === 1) {
+            dprCap = 1;
+            fxaa.enabled = false;
+          }
+          resize();
+        }
+        frameCount = 0;
+        slowFrames = 0;
+      }
       const motion = motionRef.current;
       uniforms.uMotion.value = motion ? 1 : 0;
       waterUniforms.uMotion.value = motion ? 1 : 0;
@@ -1674,7 +1702,11 @@ export default function Field3D() {
         cam.tween > 0 || cam.vel.lengthSq() > 0.0009 || keys.size > 0;
       if (motion || moving || needsRedraw) {
         camera.updateMatrixWorld();
-        updateReflection(renderer, scene, camera);
+        // tier 2: the blurred reflection updates every other frame
+        reflectPhase ^= 1;
+        if (quality < 2 || reflectPhase === 1) {
+          updateReflection(renderer, scene, camera);
+        }
         composer.render();
         needsRedraw = false;
       }
