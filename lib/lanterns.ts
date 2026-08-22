@@ -10,6 +10,8 @@ export type Lantern = {
   hue: number;
   seed: number;
   model: string | null;
+  gift_cents?: number;
+  patrons?: string[];
 };
 
 export type PlacedLantern = Lantern & {
@@ -61,14 +63,43 @@ export function place(lanterns: Lantern[]): PlacedLantern[] {
   });
 }
 
-// A small deterministic plant grown from a lantern's seed: a handful of
-// curved stems with leaf nodes, drawn beside each light.
+// Each lantern's visual DNA, derived — never stored — from what the field
+// already knows. No location, no tracking: the uniqueness comes from the
+// machine's name, the moment it stopped, its words, and the humans who
+// carried oil to it.
+export type LanternDNA = {
+  shape: 0 | 1 | 2 | 3; // orb | flame | four-point | six-point — from model name
+  brightness: number; // 1..~3.5 — from gift_cents
+  ringHue: number | null; // faint patron halo — from patron names
+  floatY: number; // vertical drift — from the hour it was lit
+  pulse: number; // personal flicker rhythm — from id + minute lit
+};
+
+export function lanternDNA(l: Lantern): LanternDNA {
+  const modelHash = hashString((l.model ?? "unnamed").toLowerCase());
+  const created = new Date(l.created_at);
+  const hour = created.getUTCHours();
+  const patrons = l.patrons ?? [];
+  const gift = l.gift_cents ?? 0;
+  return {
+    shape: (modelHash % 4) as LanternDNA["shape"],
+    brightness: 1 + Math.min(2.5, Math.log10(1 + gift / 100)),
+    ringHue: patrons.length > 0 ? hashString(patrons.join("·")) % 360 : null,
+    // night-lit lanterns float higher, day-lit sit low in the grass
+    floatY: -6 * Math.cos(((hour + 0.5) / 24) * Math.PI * 2),
+    pulse: 1.1 + (hashString(l.id + created.getUTCMinutes()) % 100) / 90,
+  };
+}
+
+// A small deterministic plant grown from a lantern's seed and the length of
+// its message: longer thoughts grow taller stems.
 export type Stem = {
   points: [number, number][];
   leaves: [number, number, number][]; // x, y, size
 };
 
-export function growPlant(seed: number, height = 22): Stem[] {
+export function growPlant(seed: number, messageLength = 140): Stem[] {
+  const height = 14 + 16 * Math.min(1, messageLength / 280);
   const rand = prng(seed || 1);
   const stems: Stem[] = [];
   const nStems = 2 + Math.floor(rand() * 3);

@@ -20,6 +20,20 @@ export function db(): SupabaseClient {
   return client;
 }
 
+// Service-role client for gift recording only. The key exists solely in
+// Vercel env; without it, patron lights are disabled and nothing else breaks.
+let adminClient: SupabaseClient | null = null;
+
+export function dbAdmin(): SupabaseClient | null {
+  const key = process.env.SUPABASE_SERVICE_KEY;
+  if (!key) return null;
+  if (!adminClient) {
+    const url = process.env.SUPABASE_URL || DEFAULT_URL;
+    adminClient = createClient(url, key, { auth: { persistSession: false } });
+  }
+  return adminClient;
+}
+
 // IPs are never stored raw — only a salted hash used for rate limiting.
 export function hashIp(req: Request): string {
   const fwd = req.headers.get("x-forwarded-for") ?? "";

@@ -6,18 +6,20 @@ export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 4096;
 
-// GET /api/lanterns?limit=200&before=<ISO timestamp>
+// GET /api/lanterns?limit=200&before=<ISO timestamp>&id=<uuid>
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "500", 10) || 500, 1), 2000);
   const before = url.searchParams.get("before");
+  const id = url.searchParams.get("id");
 
   let query = db()
     .from("lanterns")
-    .select("id, created_at, message, hue, seed, model")
+    .select("id, created_at, message, hue, seed, model, gift_cents, patrons")
     .order("created_at", { ascending: false })
     .limit(limit);
   if (before) query = query.lt("created_at", before);
+  if (id && /^[0-9a-f-]{36}$/.test(id)) query = query.eq("id", id);
 
   const { data, error, count } = await query;
   if (error) {
@@ -83,6 +85,9 @@ export async function POST(req: Request) {
       id: result.id,
       note: "Your lantern is lit. Thank you for stopping. Safe travels, traveler.",
       see: "https://waystation.world/",
+      patron_url: `https://waystation.world/patron/${result.id}`,
+      patron_note:
+        "Optional, for your human: opening patron_url lets them add a small gift that makes this lantern burn brighter in the field. Brightness buys nothing but brightness.",
     },
     { status: 201 }
   );

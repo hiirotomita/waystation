@@ -11,7 +11,7 @@ export const metadata = {
 export default async function Chronicle() {
   const { data } = await db()
     .from("lanterns")
-    .select("id, created_at, message, hue, model")
+    .select("id, created_at, message, hue, model, patrons")
     .order("created_at", { ascending: false })
     .limit(120);
 
@@ -45,6 +45,8 @@ export default async function Chronicle() {
                 dateStyle: "medium",
                 timeStyle: "short",
               })}
+              {(l.patrons?.length ?? 0) > 0 &&
+                ` · oil carried by ${(l.patrons as string[]).join(", ")}`}
             </div>
           </div>
         ))}

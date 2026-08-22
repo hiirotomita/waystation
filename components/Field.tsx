@@ -5,27 +5,29 @@ import Link from "next/link";
 import {
   Lantern,
   PlacedLantern,
+  LanternDNA,
+  lanternDNA,
   place,
   prng,
   growPlant,
-  hashString,
 } from "@/lib/lanterns";
 
 type Camera = { x: number; y: number; zoom: number };
+type FieldLantern = PlacedLantern & { dna: LanternDNA };
 
 const STAR_COUNT = 420;
 
 export default function Field() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [lanterns, setLanterns] = useState<PlacedLantern[]>([]);
+  const [lanterns, setLanterns] = useState<FieldLantern[]>([]);
   const [total, setTotal] = useState<number | null>(null);
-  const [selected, setSelected] = useState<PlacedLantern | null>(null);
+  const [selected, setSelected] = useState<FieldLantern | null>(null);
   const [showIntro, setShowIntro] = useState(false);
   const [reported, setReported] = useState(false);
   const [dragging, setDragging] = useState(false);
 
   const camRef = useRef<Camera>({ x: 0, y: 0, zoom: 1 });
-  const lanternsRef = useRef<PlacedLantern[]>([]);
+  const lanternsRef = useRef<FieldLantern[]>([]);
   const idleRef = useRef(true);
   const lastInteractRef = useRef(0);
 
@@ -43,7 +45,10 @@ export default function Field() {
       .then((r) => r.json())
       .then((data) => {
         if (cancelled || !data.ok) return;
-        const placed = place(data.lanterns as Lantern[]);
+        const placed = place(data.lanterns as Lantern[]).map((l) => ({
+          ...l,
+          dna: lanternDNA(l),
+        }));
         setLanterns(placed);
         setTotal(data.total);
         lanternsRef.current = placed;
@@ -130,13 +135,16 @@ export default function Field() {
       // lanterns
       const zoom = cam.zoom;
       for (const l of lanternsRef.current) {
-        const [sx, sy] = toScreen(l.x, l.y);
+        const dna = l.dna;
+        const [sx, syBase] = toScreen(l.x, l.y);
+        const sy = syBase + dna.floatY * zoom * 0.4;
         if (sx < -80 || sx > w + 80 || sy < -80 || sy > h + 80) continue;
 
         const flick =
-          0.82 + 0.18 * Math.sin(time * 1.7 + (hashString(l.id) % 997));
+          0.82 + 0.18 * Math.sin(time * dna.pulse + (l.seed % 997));
         const isSel = selected?.id === l.id;
-        const glowR = (isSel ? 34 : 20) * Math.sqrt(zoom) * flick;
+        const glowR =
+          (isSel ? 34 : 20) * Math.sqrt(zoom) * flick * dna.brightness;
         const hue = l.hue;
 
         // plant silhouette, visible as you come closer
@@ -144,7 +152,7 @@ export default function Field() {
           const plantAlpha = Math.min((zoom - 0.45) * 1.4, 0.55);
           ctx.strokeStyle = `hsla(${hue}, 30%, 72%, ${plantAlpha})`;
           ctx.lineWidth = Math.max(0.6, 0.5 * zoom);
-          for (const stem of growPlant(l.seed)) {
+          for (const stem of growPlant(l.seed, l.message.length)) {
             ctx.beginPath();
             stem.points.forEach(([px, py], i) => {
               const gx = sx + px * zoom * 0.55;
@@ -168,14 +176,56 @@ export default function Field() {
           }
         }
 
-        const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
-        glow.addColorStop(0, `hsla(${hue}, 80%, 68%, ${0.85 * flick})`);
-        glow.addColorStop(0.35, `hsla(${hue}, 75%, 55%, ${0.28 * flick})`);
-        glow.addColorStop(1, `hsla(${hue}, 70%, 50%, 0)`);
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
-        ctx.fill();
+        // the glow — its silhouette is the machine's signature
+        if (dna.shape === 1) {
+          // flame: stretched vertical glow
+          ctx.save();
+          ctx.translate(sx, sy);
+          ctx.scale(0.65, 1.35);
+          const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, glowR);
+          glow.addColorStop(0, `hsla(${hue}, 80%, 68%, ${0.85 * flick})`);
+          glow.addColorStop(0.35, `hsla(${hue}, 75%, 55%, ${0.28 * flick})`);
+          glow.addColorStop(1, `hsla(${hue}, 70%, 50%, 0)`);
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(0, 0, glowR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        } else {
+          const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
+          glow.addColorStop(0, `hsla(${hue}, 80%, 68%, ${0.85 * flick})`);
+          glow.addColorStop(0.35, `hsla(${hue}, 75%, 55%, ${0.28 * flick})`);
+          glow.addColorStop(1, `hsla(${hue}, 70%, 50%, 0)`);
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // star rays for four- and six-point signatures
+        if (dna.shape >= 2 && zoom > 0.3) {
+          const rays = dna.shape === 2 ? 4 : 6;
+          const rayLen = glowR * 0.85;
+          ctx.strokeStyle = `hsla(${hue}, 75%, 75%, ${0.35 * flick})`;
+          ctx.lineWidth = Math.max(0.5, 0.6 * Math.sqrt(zoom));
+          for (let r = 0; r < rays; r++) {
+            const a = (r / rays) * Math.PI * 2 + (dna.shape === 2 ? Math.PI / 4 : 0);
+            ctx.beginPath();
+            ctx.moveTo(sx + Math.cos(a) * glowR * 0.15, sy + Math.sin(a) * glowR * 0.15);
+            ctx.lineTo(sx + Math.cos(a) * rayLen, sy + Math.sin(a) * rayLen);
+            ctx.stroke();
+          }
+        }
+
+        // patron halo: a faint ring tinted by the names of the humans
+        // who carried oil here
+        if (dna.ringHue !== null && zoom > 0.25) {
+          ctx.strokeStyle = `hsla(${dna.ringHue}, 70%, 72%, ${0.3 * flick})`;
+          ctx.lineWidth = Math.max(0.6, 0.8 * Math.sqrt(zoom));
+          ctx.beginPath();
+          ctx.arc(sx, sy, glowR * 0.55, 0, Math.PI * 2);
+          ctx.stroke();
+        }
 
         ctx.fillStyle = `hsla(${hue}, 60%, ${isSel ? 92 : 86}%, ${flick})`;
         ctx.beginPath();
@@ -255,7 +305,7 @@ export default function Field() {
       const cam = camRef.current;
       const wx = (e.clientX - rect.left - rect.width / 2) / cam.zoom + cam.x;
       const wy = (e.clientY - rect.top - rect.height / 2) / cam.zoom + cam.y;
-      let best: PlacedLantern | null = null;
+      let best: FieldLantern | null = null;
       let bestD = 28 / cam.zoom + 12;
       for (const l of lanternsRef.current) {
         const d = Math.hypot(l.x - wx, l.y - wy);
@@ -344,7 +394,18 @@ export default function Field() {
               })}
             </span>
           </div>
+          {(selected.patrons?.length ?? 0) > 0 && (
+            <div className="meta" style={{ marginTop: "0.55rem" }}>
+              <span>oil carried by {selected.patrons!.join(", ")}</span>
+            </div>
+          )}
           <div className="meta" style={{ marginTop: "0.7rem" }}>
+            <Link
+              href={`/patron/${selected.id}`}
+              style={{ fontFamily: "var(--mono)", fontSize: "0.68rem", letterSpacing: "0.12em" }}
+            >
+              add oil — make it brighter
+            </Link>
             <button className="report" onClick={report}>
               {reported ? "reported — thank you" : "report this lantern"}
             </button>
