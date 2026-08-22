@@ -305,11 +305,14 @@ export default function Field3D() {
       const plantCol: number[] = [];
 
       ls.forEach((l, i) => {
-        // the 2D spiral becomes the water plane; height scatters like sky
-        // lanterns — hour-lit float plus a seed-fixed hang, all deterministic
+        // chronology lives in the spiral (XZ); volume lives in the stalks.
+        // Each lantern crowns its own luminous reed, whose height is fixed
+        // by the lantern's seed and hour — a forest, not a plane.
         const wx = l.x * 0.75;
         const wz = l.y * 0.75;
-        const wy = 4.5 + (l.dna.floatY + 6) * 0.85 + ((l.seed >>> 3) % 40) / 5;
+        const stalkH =
+          4 + (((l.seed >>> 5) % 997) / 997) * 24 + (l.dna.floatY + 6) * 0.35;
+        const wy = stalkH + 0.9;
         pos[i * 3] = wx;
         pos[i * 3 + 1] = wy;
         pos[i * 3 + 2] = wz;
@@ -321,19 +324,25 @@ export default function Field3D() {
         ring[i] = l.dna.ringHue === null ? -1 : l.dna.ringHue / 360;
         index[i] = i;
 
-        // plant beside the light, growing from the water up toward it
+        // the stalk: this lantern's own reeds, scaled so the tallest stem
+        // reaches exactly the light it carries
         if (i < 600) {
           const c = new THREE.Color().setHSL(l.hue / 360, 0.42, 0.55);
           const stems = growPlant(l.seed, l.message.length);
+          let maxH = 0.001;
+          for (const stem of stems)
+            for (const [, py] of stem.points) maxH = Math.max(maxH, -py);
+          const sy = stalkH / maxH;
+          const sxz = 0.22 + stalkH * 0.014;
           for (const stem of stems) {
             for (let s = 0; s < stem.points.length - 1; s++) {
               const [ax, ay] = stem.points[s];
               const [bx, by] = stem.points[s + 1];
               plantPts.push(
-                wx + ax * 0.2, -ay * 0.2, wz + ax * 0.06,
-                wx + bx * 0.2, -by * 0.2, wz + bx * 0.06
+                wx + ax * sxz, -ay * sy, wz + ax * sxz * 0.3,
+                wx + bx * sxz, -by * sy, wz + bx * sxz * 0.3
               );
-              const fadeA = 0.25 + 0.75 * (s / stem.points.length);
+              const fadeA = 0.2 + 0.8 * (s / stem.points.length);
               plantCol.push(
                 c.r * fadeA, c.g * fadeA, c.b * fadeA,
                 c.r * fadeA, c.g * fadeA, c.b * fadeA
@@ -361,12 +370,12 @@ export default function Field3D() {
       if (!cam.framed) {
         cam.framed = true;
         const radius = 26 * Math.sqrt(n + 0.6) * 0.75;
-        cam.pos.set(0, 11, radius + 42);
+        cam.pos.set(0, 8.5, radius + 42);
       }
 
       mirror = new THREE.Points(geo, makeMat(mirrorUniforms));
       mirror.frustumCulled = false;
-      mirror.scale.set(1, -0.35, 1);
+      mirror.scale.set(1, -0.85, 1);
       scene.add(mirror);
 
       const pg = new THREE.BufferGeometry();
@@ -384,6 +393,21 @@ export default function Field3D() {
       );
       plants.frustumCulled = false;
       scene.add(plants);
+
+      // the stalks reflect in the water alongside their lights
+      const plantMirror = new THREE.LineSegments(
+        pg,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.1,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        })
+      );
+      plantMirror.scale.set(1, -0.85, 1);
+      plantMirror.frustumCulled = false;
+      plants.add(plantMirror);
     };
 
     const pick = (nx: number, ny: number): number => {
